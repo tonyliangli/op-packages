@@ -68,7 +68,7 @@
  
  # Restore original port configuration
 @@ -253,6 +253,6 @@
-     if [ -n "$adguardhome_boot" ]; then
+     if [ -n "$ADGUARDHOME_BOOT" ]; then
          # Wait for interfaces to be up before starting AdGuard Home
          # Prevents issues like https://github.com/openwrt/packages/issues/21868
 -        procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
