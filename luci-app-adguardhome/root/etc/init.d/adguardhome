@@ -28,6 +28,7 @@ use_port53() {
     uci set "dhcp.@dnsmasq[0].port=$adguard_port"
     uci commit dhcp
     /etc/init.d/dnsmasq restart
+    sleep 3
 }
 
 # Restore original port configuration
@@ -253,6 +254,6 @@ service_triggers() {
     if [ -n "$ADGUARDHOME_BOOT" ]; then
         # Wait for interfaces to be up before starting AdGuard Home
         # Prevents issues like https://github.com/openwrt/packages/issues/21868
-        procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
+        procd_add_raw_trigger 'interface.*.up' 10000 /etc/init.d/adguardhome restart
     fi
 }
