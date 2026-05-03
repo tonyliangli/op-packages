@@ -101,7 +101,7 @@ return view.extend({
 		/* Currently the sysupgrade rpc call will not return, hence no promise handling */
 		fs.exec('/sbin/firstboot', [ '-r', '-y' ]);
 
-		ui.awaitReconnect('10.0.0.1', 'kwrt.lan');
+		ui.awaitReconnect('10.10.10.2', 'kwrt.lan');
 	},
 
 	handleRestore(ev) {
@@ -163,7 +163,7 @@ return view.extend({
 					E('p', { 'class': 'spinning' }, _('The system is rebooting now. If the restored configuration changed the current LAN IP address, you might need to reconnect manually.'))
 				]);
 
-				ui.awaitReconnect(window.location.host, '10.0.0.1', 'kwrt.lan');
+				ui.awaitReconnect(window.location.host, '10.10.10.2', 'kwrt.lan');
 			}, this))
 			.catch(function(e) { ui.addNotification(null, E('p', e.message)) })
 			.finally(function() { btn.firstChild.data = _('Upload archive...') });
@@ -342,7 +342,7 @@ return view.extend({
 		if (opts['keep'][0].checked)
 			ui.awaitReconnect(window.location.host);
 		else
-			ui.awaitReconnect('10.0.0.1', 'kwrt.lan');
+			ui.awaitReconnect('10.10.10.2', 'kwrt.lan');
 	},
 
 	handleBackupList(ev) {
