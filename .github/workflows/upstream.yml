@@ -53,11 +53,11 @@ jobs:
           for i in 1 2 3; do
             git clone --depth 1 $1 $2 && return 0
             echo "retry $i on $1"
-            rm -rf $2
             sleep 5
           done
           echo "error on $1"
-          exit 1
+          pid="$( ps -q $$ )"
+          kill $pid
         }
         function git_sparse_clone() {
           trap 'rm -rf "$tmpdir"' EXIT
@@ -78,12 +78,10 @@ jobs:
               git sparse-checkout set "$@"
               mv -n $@ $rootdir/ || true
               cd $rootdir
-              rm -rf "$tmpdir"
               return 0
             fi
             echo "retry $i on $curl"
             cd $rootdir
-            rm -rf "$tmpdir"
             sleep 5
           done
           echo "error on $curl"
