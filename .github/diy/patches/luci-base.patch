@@ -214,3 +214,24 @@
 -	$(CP) ../../LICENSE $(PKG_BUILD_DIR)
 +	$(CP) $(TOPDIR)/feeds/luci/NOTICE $(PKG_BUILD_DIR)
 +	$(CP) $(TOPDIR)/feeds/luci/LICENSE $(PKG_BUILD_DIR)
+
+--- a/luci-app-wizard/root/usr/share/luci/menu.d/luci-app-wizard.json
++++ b/luci-app-wizard/root/usr/share/luci/menu.d/luci-app-wizard.json
+@@ -10,5 +10,17 @@
+ 			"acl": [ "luci-app-wizard" ],
+ 			"uci": { "wizard": true }
+ 		}
++	},
++	"admin/wizard": {
++		"title": "Wizard",
++		"order": 1,
++		"action": {
++			"type": "view",
++			"path": "wizard/initsetup"
++		},
++		"depends": {
++			"acl": [ "luci-app-wizard" ],
++			"uci": { "wizard": true }
++		}
+ 	}
+ }
