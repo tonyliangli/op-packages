@@ -215,23 +215,22 @@
 +	$(CP) $(TOPDIR)/feeds/luci/NOTICE $(PKG_BUILD_DIR)
 +	$(CP) $(TOPDIR)/feeds/luci/LICENSE $(PKG_BUILD_DIR)
 
---- a/luci-app-wizard/root/usr/share/luci/menu.d/luci-app-wizard.json
-+++ b/luci-app-wizard/root/usr/share/luci/menu.d/luci-app-wizard.json
-@@ -10,5 +10,17 @@
- 			"acl": [ "luci-app-wizard" ],
- 			"uci": { "wizard": true }
- 		}
-+	},
-+	"admin/wizard": {
-+		"title": "Wizard",
-+		"order": 1,
-+		"action": {
-+			"type": "view",
-+			"path": "wizard/initsetup"
-+		},
-+		"depends": {
-+			"acl": [ "luci-app-wizard" ],
-+			"uci": { "wizard": true }
-+		}
- 	}
- }
+--- a/luci-base/ucode/template/header.ut
++++ b/luci-base/ucode/template/header.ut
+@@ -12,6 +12,6 @@
+ 	if (ctx.authsession &&
+ 	    wizard_request[0] == 'admin' &&
+-	    wizard_request[1] != 'wizard' &&
++	    (wizard_request[1] != 'system' || wizard_request[2] != 'initsetup') &&
+ 	    access('/etc/config/wizard') &&
+ 	    !access('/usr/sbin/quickstart') &&
+ 	    !access('/etc/config/finished')) {
+@@ -24,7 +24,7 @@
+ 
+ {% if (wizard_pending): %}
+ <script>
+-	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/wizard')) }});
++	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/system/initsetup')) }});
+ </script>
+ {% endif %}
+ 
