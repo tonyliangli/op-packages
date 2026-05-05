@@ -217,20 +217,11 @@
 
 --- a/luci-base/ucode/template/header.ut
 +++ b/luci-base/ucode/template/header.ut
-@@ -12,6 +12,6 @@
- 	if (ctx.authsession &&
- 	    wizard_request[0] == 'admin' &&
--	    wizard_request[1] != 'wizard' &&
-+	    (wizard_request[1] != 'system' || wizard_request[2] != 'initsetup') &&
- 	    access('/etc/config/wizard') &&
- 	    !access('/usr/sbin/quickstart') &&
+@@ -18,6 +18,6 @@
  	    !access('/etc/config/finished')) {
-@@ -24,7 +24,7 @@
+ 		let wizard_uci = cursor();
+-		wizard_pending = (wizard_uci.get('wizard', 'config', 'finished') != '1');
++		wizard_pending = false;
+ 	}
  
- {% if (wizard_pending): %}
- <script>
--	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/wizard')) }});
-+	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/system/initsetup')) }});
- </script>
- {% endif %}
- 
+ 	include(`themes/${theme}/header`);
