@@ -12,7 +12,7 @@
 
 	if (ctx.authsession &&
 	    wizard_request[0] == 'admin' &&
-	    wizard_request[1] != 'wizard' &&
+	    (wizard_request[1] != 'system' || wizard_request[2] != 'initsetup') &&
 	    access('/etc/config/wizard') &&
 	    !access('/usr/sbin/quickstart') &&
 	    !access('/etc/config/finished')) {
@@ -25,7 +25,7 @@
 
 {% if (wizard_pending): %}
 <script>
-	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/wizard')) }});
+	window.location.replace({{ sprintf('%J', dispatcher.build_url('admin/system/initsetup')) }});
 </script>
 {% endif %}
 
