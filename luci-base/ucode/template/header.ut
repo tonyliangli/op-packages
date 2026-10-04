@@ -17,7 +17,7 @@
 	    !access('/usr/sbin/quickstart') &&
 	    !access('/etc/config/finished')) {
 		let wizard_uci = cursor();
-		wizard_pending = false;
+		wizard_pending = (wizard_uci.get('wizard', 'config', 'finished') != '1');
 	}
 
 	include(`themes/${theme}/header`);

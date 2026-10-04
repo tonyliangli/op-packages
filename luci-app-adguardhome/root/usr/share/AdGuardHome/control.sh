@@ -126,6 +126,7 @@ use_port53() {
     uci set dhcp.@dnsmasq[0].port="$adguardhome_PORT"
     uci commit dhcp
     /etc/init.d/dnsmasq restart
+    sleep 3
     agh_reload
 }
 
