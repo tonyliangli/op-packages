@@ -8,12 +8,12 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=torrserver
-PKG_VERSION:=MatriX.141
-PKG_RELEASE:=1
+PKG_VERSION:=142
+PKG_RELEASE:=25
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/YouROK/TorrServer.git
-PKG_SOURCE_VERSION:=d266990face0a530880a19a3e39666d21931aed9
+PKG_SOURCE_VERSION:=f0585eb7dfc92e0e5fdcb17a7e7eead212201e7d
 PKG_MIRROR_HASH:=skip
 
 PKG_MAINTAINER:=Konstantine Shevlakov <shevlakov@132lan.ru>
@@ -73,7 +73,7 @@ define Package/$(PKG_NAME)/description
   TorrServer is a tool for streaming torrent files.
 endef
 
-GO_HOST:=$(STAGING_DIR_HOSTPKG)/bin/go
+GO_HOST=$(firstword $(wildcard $(STAGING_DIR_HOSTPKG)/bin/go) $(wildcard $(STAGING_DIR_HOSTPKG)/bin/go[0-9].[0-9][0-9]) $(STAGING_DIR_HOSTPKG)/bin/go)
 UPX:=$(STAGING_DIR_HOST)/bin/upx
 UPX_AVAILABLE:=$(shell [ -x "$(UPX)" ] && echo yes || echo no)
 TARGET_CC:=$(TARGET_CROSS)gcc

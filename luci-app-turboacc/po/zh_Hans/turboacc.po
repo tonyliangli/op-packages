@@ -12,10 +12,6 @@ msgstr ""
 msgid "Acceleration Status"
 msgstr "加速状态"
 
-#: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:182
-msgid "Boardcom fullcone"
-msgstr "Boardcom fullcone"
-
 #: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:151
 msgid "Bridge Acceleration"
 msgstr "桥接加速"
@@ -93,9 +89,9 @@ msgstr "全锥形 NAT1"
 msgid "FULLCONENAT"
 msgstr "兼容模式全锥形 NAT1"
 
-#: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:177
-msgid "Boardcom Fullcone NAT1"
-msgstr "高性能 Boardcom 全锥形 NAT1"
+#: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:197
+msgid "Broadcom Fullcone NAT1"
+msgstr "高性能 Broadcom 全锥形 NAT1"
 
 #: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:178
 msgid "Full cone NAT (NAT1) can improve gaming performance effectively."
@@ -135,6 +131,9 @@ msgstr "需要硬件 NAT 支持。目前 mt762x/mt798x 已实现。"
 msgid "Requires hardware support, implemented at least for Filogic 8x0"
 msgstr "需要硬件支持，目前 Filogic 8x0 已实现"
 
+msgid "Takes effect after rebooting the router."
+msgstr "重启路由器后生效。"
+
 #: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:126
 msgid "SFE connection manager"
 msgstr "SFE connection manager"
@@ -172,7 +171,3 @@ msgstr "Turbo ACC 网络加速设置"
 #: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:181
 msgid "xt_FULLCONENAT"
 msgstr "兼容模式"
-
-#: applications/luci-app-turboacc/htdocs/luci-static/resources/view/turboacc.js:182
-msgid "Boardcom fullcone"
-msgstr "高性能模式"

@@ -1,8 +1,7 @@
 <h4 align="right"><strong>English</strong> | <a href="README_zh.md">简体中文</a></h4>
 <p align="center">
-    <img src="https://raw.githubusercontent.com/eamonxg/assets/master/aurora/logo/logo-rounded.png" width="152"/>
+    <img src="https://raw.githubusercontent.com/eamonxg/assets/master/aurora/logo/logo-lockup.png" width="360" alt="Aurora Theme"/>
 </p>
-<h1 align="center">Aurora Theme</h1>
 <p align="center"><strong>A modern OpenWrt LuCI theme built with Vite and Tailwind CSS.</strong></p>
 <h4 align="center">🏔️ Pure | 🦢 Elegant | 📱 Responsive | 🌗 Dark/Light Mode | ⚙️ Settable </h4>
 <div align="center">
@@ -13,30 +12,25 @@
   <a href="https://github.com/eamonxg/luci-theme-aurora/releases/latest"><img alt="GitHub release" src="https://img.shields.io/github/v/release/eamonxg/luci-theme-aurora"></a>
   <a href="https://github.com/eamonxg/luci-theme-aurora/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/eamonxg/luci-theme-aurora/total"></a>
   <a href="https://discord.gg/EBncRrzfTw"><img alt="Discord" src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white"></a>
+  <a href="#contributing"><img alt="Contributors" src="https://img.shields.io/github/contributors/eamonxg/luci-theme-aurora?color=orange"></a>
 </div>
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/eamonxg/assets/master/aurora/preview/theme/multi-device-showcase.png" alt="Multi-Device Showcase" width="100%">
 </div>
 
-> [!NOTE]
-> **🤖 Exploring AI Workflows...**
->
-> Hey everyone — I've been pretty busy with work lately, so my time for Aurora has been limited. But I don't want the project to stall, so I've been exploring AI-assisted workflows to help pick up the slack, especially on the debugging side.
->
-> There's a backlog of open issues right now, and honestly, most of them are styling compatibility problems with third-party plugins. These aren't huge issues individually, but they're incredibly time-consuming to track down — you have to install the plugin, sometimes set up specific conditions on the router just to reproduce the problem.
->
-> The root cause is that LuCI only provides a basic set of web components. When plugin authors need more complex UI, they end up rolling their own HTML/CSS/JS with no shared conventions, so compatibility headaches are inevitable. With the sheer number of LuCI plugins out there, getting them all to play nicely is a massive undertaking — especially when some plugins don't even follow LuCI's own JS conventions.
->
-> So I'm bringing AI into the loop to handle these tedious but important tasks, and ideally automate as much of it as possible. If you have better ideas or suggestions, I'd love to hear them — come chat on [Discord](https://discord.gg/EBncRrzfTw).
 
 ## Features
 
 - **Modern**: Modern, content-first UI design with a clean layout and elegant animations.
+- **Fast, silky navigation**: On supported browsers, switching pages only updates the content instead of reloading the whole page, so moving between pages feels silky and seamless — and loads much faster, about 67% quicker per page switch at the median in our measurements (see the [router doc](.dev/docs/router.md#why-it-pays-measured)). This no-reload page-switching took cues from [luci-theme-footstrap](https://github.com/VizzleTF/luci-theme-footstrap).
 - **Mobile-friendly**: Optimized for mobile interactions and display, supporting both smartphones and tablets.
 - **Theme Switcher**: Built-in theme switcher with seamless switching between Auto (system), Light, and Dark modes.
-- **Floating Toolbar**: Clickable button icons for quick access to frequently used pages
-- **Customizable**: The [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config) plugin includes multiple built‑in theme presets you can switch between, and lets you customize colors, navigation submenu styles, the theme logo, and the floating toolbar (add or edit frequently used pages).
+- **Command Palette (⌘K)**: Search and jump to any page from the header.
+- **Custom Background**: Set your own wallpaper for the login page and the admin interface.
+- **Floating Toolbar**: Clickable button icons for quick access to frequently used pages.
+- **Installable (PWA)**: Ships a web app manifest and app icons, so LuCI can be installed to your home screen and launched like a native app.
+- **Customizable**: The [luci-app-aurora-config](https://github.com/eamonxg/luci-app-aurora-config) plugin ships five built-in theme presets and lets you customize Light/Dark color tokens, the navigation layout (Mega Menu, Dropdown, Sidebar), layout density, typography, branding, page backgrounds, and the floating toolbar — plus a theme store to browse and share complete themes.
 
 ## Preview
 
@@ -60,56 +54,109 @@
   - **Chrome/Edge 111+** _(released March 2023)_
   - **Safari 16.4+** _(released March 2023)_
   - **Firefox 128+** _(released July 2024)_
+  - _Optional enhancement, not a requirement:_ same-document navigation (no full page reload between view pages) uses the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API) where available — Chrome/Edge 105+, Safari 26.2+, Firefox 147+. Browsers without it keep classic full-page navigation automatically, with no loss of function.
 
 ## Installation
+
+Run these commands on the router itself (e.g. over an SSH session).
+
+### Via the eamonxg package feed
+
+```sh
+wget -qO- https://openwrt.eamonxg.fun/install.sh | sh
+```
+
+That is the whole installation — the script adds the feed and installs whatever you tick from the list it shows. Upgrade later with the usual commands: `apk update && apk upgrade luci-theme-aurora`, or `opkg update && opkg upgrade luci-theme-aurora`. Details: [openwrt.eamonxg.fun](https://openwrt.eamonxg.fun/).
+
+> **apk**: if this package was previously installed from a downloaded `.apk` file, that pinned it in `/etc/apk/world` and `apk upgrade` will silently do nothing — success reported, version unchanged. Run `apk add luci-theme-aurora` once (the name, no path) to clear the pin. The script above already does this for you.
+
+### Via a GitHub release
 
 OpenWrt 25.12+ and snapshots use `apk`; other versions use `opkg`:
 
 > **Tip**: You can confirm your package manager by running `opkg --version` or `apk --version`. If it returns output (not "not found"), that's your package manager.
 
-- **opkg** (OpenWrt < 25.12):
+```sh
+cd /tmp
 
-  ```sh
-  cd /tmp && uclient-fetch -O luci-theme-aurora.ipk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora_0.11.0-r20260208_all.ipk && opkg install luci-theme-aurora.ipk
-  ```
+# opkg
+uclient-fetch -O luci-theme-aurora.ipk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora_1.4.0-r20260920_all.ipk
+opkg install luci-theme-aurora.ipk
 
-- **apk** (OpenWrt 25.12+ and snapshots):
-  ```sh
-  cd /tmp && uclient-fetch -O luci-theme-aurora.apk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora-0.11.0-r20260208.apk && apk add --allow-untrusted luci-theme-aurora.apk
-  ```
+# apk
+uclient-fetch -O luci-theme-aurora.apk https://github.com/eamonxg/luci-theme-aurora/releases/latest/download/luci-theme-aurora-1.4.0-r20260920.apk
+apk add --allow-untrusted luci-theme-aurora.apk
+```
+
+## Build from source
+
+Build the package yourself with the OpenWrt build system. Host prerequisites: [Build system setup](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem). The build writes the package to `bin/packages/<arch>/base/` (e.g. `bin/packages/x86_64/base/luci-theme-aurora_*_all.ipk`); copy it to your router and install it as above.
+
+### Via the full source tree or SDK
+
+Get set up — clone the full source tree:
+
+```sh
+# Full source tree — the openwrt-24.10 branch builds an .ipk, the main branch builds an .apk
+git clone https://github.com/openwrt/openwrt.git
+cd openwrt
+git checkout openwrt-24.10
+```
+
+Or the [prebuilt SDK](https://openwrt.org/docs/guide-developer/toolchain/using_the_sdk) (faster: skips building the toolchain). Grab the archive for your target from [downloads.openwrt.org](https://downloads.openwrt.org), which splits SDKs into Release and Snapshot builds — Release 24.10.x and earlier build `.ipk`; Release 25.12+ and Snapshot build `.apk` (filename, arch and compression vary by target):
+
+```sh
+wget <sdk-archive-url-from-downloads.openwrt.org>
+tar -xf openwrt-sdk-*.tar.*
+cd openwrt-sdk-*/
+```
+
+Then, from that directory:
+
+```sh
+# Add this package and install feeds (provides luci-base)
+git clone https://github.com/eamonxg/luci-theme-aurora.git package/luci-theme-aurora
+./scripts/feeds update -a
+./scripts/feeds install -a
+
+# Select the theme in menuconfig: LuCI → Themes → luci-theme-aurora
+make menuconfig
+
+# Skip these two lines with the SDK — it already ships a built toolchain
+make tools/install -j$(nproc)
+make toolchain/install -j$(nproc)
+
+make package/luci-theme-aurora/compile -j$(nproc) V=s
+```
 
 ## Contributing
 
-<details>
-<summary><b>Development</b></summary>
+Aurora uses **Vite** and a modern front-end toolchain, and is experimenting with end-to-end AI integration across the full development workflow. See [Development Documentation](.dev/docs/DEVELOPMENT.md) to get started. Suggestions and PRs are always welcome.
 
-<p>As we step into 2026, front-end toolchains have become mature and advanced, and modern browsers now support a wide range of exciting new features. Fully embracing the modern front-end ecosystem is at the core of the Aurora theme.</p>
+[discord.gg/EBncRrzfTw](https://discord.gg/EBncRrzfTw)
 
-<p>Aurora uses <strong>Vite</strong> as the build tool.</p>
+Thanks goes to these wonderful people:
 
-<ul>
-<li>During development, you can freely choose and integrate any CSS toolchain.</li>
-<li>In production, multiple strategies are available to optimize bundled assets.</li>
-<li>Most importantly, with the help of a local proxy server, style changes can be previewed in real time!</li>
-</ul>
-
-<p>For more development information, see <a href=".dev/docs/DEVELOPMENT.md">Development Documentation</a>.</p>
-
-</details>
-
-<h4>Community</h4>
-
-<p>I've got a Discord server going - come hang out and chat! 👋 <a href="https://discord.gg/EBncRrzfTw">Join Discord</a></p>
+<!-- contributors:start -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/eamonxg"><img src="https://avatars.githubusercontent.com/u/114069097?v=4&s=160" width="80px;" alt="eamonxg"/><br /><sub><b>eamonxg</b></sub></a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/cjayacopra"><img src="https://avatars.githubusercontent.com/u/83209495?v=4&s=160" width="80px;" alt="cjayacopra"/><br /><sub><b>cjayacopra</b></sub></a></td>
+      <td align="center" valign="top" width="14.29%"><a href="https://github.com/chillykidd"><img src="https://avatars.githubusercontent.com/u/197483577?v=4&s=160" width="80px;" alt="chillykidd"/><br /><sub><b>chillykidd</b></sub></a></td>
+    </tr>
+  </tbody>
+</table>
+<!-- contributors:end -->
 
 ## License & Credits
 
-This project is licensed under the Apache License 2.0.
+[Apache 2.0](LICENSE). Thanks to:
 
-The production build structure is based on the official OpenWrt theme
-[luci-theme-bootstrap](https://github.com/openwrt/luci/tree/master/themes/luci-theme-bootstrap).
-
-Visual style and some implementations are influenced by
-[Apple](https://www.apple.com/) and [Vercel](https://vercel.com/).
-
-The project is developed using a modern front-end stack, including
-[Vite](https://vitejs.dev/) and [Tailwind CSS](https://tailwindcss.com/).
+- [luci-theme-bootstrap](https://github.com/openwrt/luci/tree/master/themes/luci-theme-bootstrap)
+- [luci-theme-footstrap](https://github.com/VizzleTF/luci-theme-footstrap) — a LuCI theme with its own client-side router. Aurora's same-document navigation borrows some of its ideas and implements them on the Navigation API instead — see the [router doc](.dev/docs/router.md)
+- [Vite](https://vitejs.dev/)
+- [Tailwind CSS](https://tailwindcss.com/)
+- [Tabler Icons](https://tabler.io/icons) — the interface icon set
+- [Claude Code](https://claude.ai/code)
+- [Apple](https://www.apple.com/) and [Vercel](https://vercel.com/) — design inspiration

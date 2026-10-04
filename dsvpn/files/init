@@ -1,6 +1,16 @@
 #!/bin/sh /etc/rc.common
 # Copyright (C) 2019 Ycarus (Yannick Chabanois) <ycarus@zugaina.org> for OpenMPTCProuter project
 
+# network.globals.multipath='disable' means the kernel is running with
+# net.mptcp.enabled=0. Asking for an MPTCP socket then fails outright with
+# ENOPROTOOPT ("Protocol not available") -- the kernel has no implicit
+# fallback to plain TCP, every caller has to do it itself, and most don't.
+# Only an explicit "disable" counts, so this package keeps its stock
+# behaviour wherever network.globals.multipath doesn't exist at all.
+_omr_mptcp_globally_disabled() {
+	[ "$(uci -q get network.globals.multipath)" = "disable" ]
+}
+
 START=90
 STOP=10
 
@@ -41,6 +51,8 @@ version_over_5_4() {
 
 start_instance() {
 	local enable key host port dev
+	local key_dir="/var/run/${PROG_NAME}"
+	local key_file="${key_dir}/${1}.key"
 
 	validate_section "${1}" || {
 		_err "validation failed"
@@ -55,7 +67,12 @@ start_instance() {
 	[ -z "${port}" ] && port="auto"
 	[ -n "${dev}" ] || return 1
 
-	echo "${key}" > /tmp/${PROG_NAME}-${1}.key
+	mkdir -p "$key_dir"
+	chmod 0700 "$key_dir"
+	( umask 077; printf '%s\n' "$key" > "$key_file" ) || {
+		_err "can't create key file"
+		return 1
+	}
 	key=""
 
 	if [ "$(uci -q get network.omrvpn)" != "" ] && [ "$(uci -q get network.omrvpn)" != "$dev" ]; then
@@ -68,14 +85,18 @@ start_instance() {
 
 	_log "starting ${PROG_NAME} ${1} instance $*"
 
-	if version_over_5_4; then
+	# mptcpize LD_PRELOADs a socket() that always asks for IPPROTO_MPTCP and
+	# never falls back, so with MPTCP globally off dsvpn cannot create its
+	# socket at all ("Couldn't create connection: Protocol not available")
+	# and procd just respawns it forever. Run it unwrapped instead.
+	if version_over_5_4 && ! _omr_mptcp_globally_disabled; then
 		PROG="mptcpize run ${PROG}"
 	fi
 
 	procd_open_instance
 
 	procd_set_param command ${PROG} ${mode} \
-		/tmp/${PROG_NAME}-${1}.key \
+		"$key_file" \
 		$host \
 		$port \
 		$dev  \
@@ -87,7 +108,7 @@ start_instance() {
 
 	procd_set_param respawn 0 30 5
 	procd_set_param nice 10
-	procd_set_param file /tmp/${PROG_NAME}-${1}.key
+	procd_set_param file "$key_file"
 
 	procd_set_param stdout 1
 	procd_set_param stderr 1

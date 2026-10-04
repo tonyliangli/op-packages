@@ -6,7 +6,7 @@
 'require tools.widgets as widgets';
 
 /*
- * Copyright (C) 2024-2025 Ycarus (Yannick Chabanois) <contact@openmptcprouter.com> for OpenMPTCProuter
+ * Copyright (C) 2024-2026 Ycarus (Yannick Chabanois) <contact@openmptcprouter.com> for OpenMPTCProuter
  * This is free software, licensed under the GNU General Public License v3.
  * See /LICENSE for more information
  */
@@ -20,13 +20,22 @@ var callSystemBoard = rpc.declare({
 return L.view.extend({
     load: function() {
 	return Promise.all([
-	    L.resolveDefault(callSystemBoard(), {})
+	    L.resolveDefault(callSystemBoard(), {}),
+	    L.resolveDefault(fs.read('/proc/sys/net/mptcp/available_path_managers'), '')
 	]);
     },
 
     render: function(res) {
 	var m, s, o;
 	var boardinfo = res[0];
+	// Mainline MPTCP registers its path managers by name and advertises the
+	// list here ('kernel userspace', plus any BPF path manager). A kernel
+	// that advertises nothing is either the out-of-tree v0.9x stack or a 6.x
+	// one predating net.mptcp.path_manager: there the legacy vocabulary below
+	// is all we have to go on.
+	var availablePathManagers = String(res[1] || '').trim().split(/\s+/).filter(function(name) {
+		return name.length > 0;
+	});
 
 	function normalizeSchedulerValue(value) {
 		if (value == null)
@@ -39,6 +48,27 @@ return L.view.extend({
 
 		if (normalized.startsWith('mptcp_'))
 			normalized = normalized.slice(6);
+
+		return normalized;
+	}
+
+	// Every out-of-tree v0.9x path manager (default/fullmesh/ndiffports/
+	// binder/netlink) is an in-kernel one, so on a kernel that registers its
+	// path managers by name they all mean the same thing: 'kernel'. A config
+	// upgraded from that stack, or restored from such a backup, still carries
+	// one of those names, which is not in the list and would leave the
+	// dropdown showing nothing.
+	function normalizePathManagerValue(value) {
+		if (value == null)
+			return value;
+
+		var normalized = String(value).trim();
+
+		if (normalized === '' || availablePathManagers.indexOf(normalized) >= 0)
+			return normalized;
+
+		if (availablePathManagers.indexOf('kernel') >= 0)
+			return 'kernel';
 
 		return normalized;
 	}
@@ -62,14 +92,28 @@ return L.view.extend({
 		o.value(0, _("disable"));
 	}
 
-	o = s.option(form.ListValue, "mptcp_path_manager", _("Multipath TCP path-manager"), _("Default is fullmesh"));
-	o.value("default", _("default"));
-	o.value("fullmesh", "fullmesh");
+	if (availablePathManagers.length > 0) {
+		o = s.option(form.ListValue, "mptcp_path_manager", _("Multipath TCP path-manager"),
+			_("Path managers registered by the running kernel. 'kernel' is the in-kernel one, which creates the extra subflows itself; 'userspace' hands that over to mptcpd."));
+		availablePathManagers.forEach(function(name) {
+			o.value(name, name);
+		});
+		o.cfgvalue = function(section_id) {
+			return normalizePathManagerValue(uci.get('network', section_id, 'mptcp_path_manager'));
+		};
+		o.write = function(section_id, value) {
+			uci.set('network', section_id, 'mptcp_path_manager', normalizePathManagerValue(value));
+		};
+	} else {
+		o = s.option(form.ListValue, "mptcp_path_manager", _("Multipath TCP path-manager"), _("Default is fullmesh"));
+		o.value("default", _("default"));
+		o.value("fullmesh", "fullmesh");
 
-	if (parseFloat(boardinfo.kernel.substring(0,4)) < 6) {
-		o.value("ndiffports", "ndiffports");
-		o.value("binder", "binder");
-		o.value("netlink", _("Netlink"));
+		if (parseFloat(boardinfo.kernel.substring(0,4)) < 6) {
+			o.value("ndiffports", "ndiffports");
+			o.value("binder", "binder");
+			o.value("netlink", _("Netlink"));
+		}
 	}
 
 	var scheduler = s.option(form.ListValue, "mptcp_scheduler", _("Multipath TCP scheduler"), _('BPF schedulers (not available on all platforms):') + '<br />' +
@@ -114,6 +158,14 @@ return L.view.extend({
 		return m.checkDepends();
 	};
 
+	o = s.option(form.Flag, "mptcp_dscp_weight_vps_sync", _("Mirror DSCP/weight pins to gateway"),
+		_("When using a DSCP or weight BPF scheduler, also sync each WAN’s pin to the gateway (VPS) so it also holds for traffic the gateway sends (downloads), not just traffic the router sends (uploads). Disabling this only stops future syncs -- it does not remove pins already pushed to the gateway."));
+	o.default = "1";
+	o.depends("mptcp_scheduler", "bpf_dscp");
+	o.depends("mptcp_scheduler", "bpf_weight");
+	o.depends("mptcp_scheduler", "bpf_weight_rr");
+	o.depends("mptcp_scheduler", "bpf_burstweight");
+
 	if (parseFloat(boardinfo.kernel.substring(0,4)) < 6) {
 		o = s.option(form.Value, "mptcp_syn_retries", _("Multipath TCP SYN retries"));
 		o.datatype = "uinteger";
@@ -143,6 +195,16 @@ return L.view.extend({
 		o.value(0, _("In-kernel path manager"));
 		o.value(1, _("Userspace path manager"));
 		o.default = 0;
+		// LuCI's CBI removes an option instead of writing it whenever the
+		// submitted value equals .default and rmempty is left at its class
+		// default of true (see issue #4348 for the same pattern). That would
+		// silently delete network.globals.mptcp_pm_type on every Save & Apply
+		// of this page (not just when this field itself is touched), and the
+		// init script's own fallback for an absent value is "1" (userspace
+		// path manager) -- the opposite of this field's default -- which
+		// disables in-kernel fullmesh subflow creation entirely and breaks
+		// multi-WAN bonding down to the master WAN only (issue #4349).
+		o.rmempty = false;
 
 		o = s.option(form.ListValue, "mptcp_disable_initial_config", _("Initial MPTCP configuration"));
 		o.depends("mptcp_pm_type","1");
@@ -275,31 +337,20 @@ return L.view.extend({
 	o.value("backup", _("backup"));
 	//o.value("handover", _("handover"));
 	o.default = "off";
+	// Same rmempty/default collision as mptcp_pm_type above: without this,
+	// every interface currently set to "off" has network.<iface>.multipath
+	// silently deleted on each Save & Apply of this page. Not harmless: the
+	// init script falls back to its own copy of the mode in
+	// openmptcprouter.<iface>.multipath before it falls back to "off", so a
+	// deleted setting brings back whatever mode the interface had before
+	// (discussion #4368).
+	o.rmempty = false;
 
-	o = s.option(form.Value, "multipath_weight", _("Weight"), _("Only for *weight schedulers/path managers (if any available)") + '<br />' + _("A weight >100 make it more attractive, a weight <100 make it less attractive. Max 256"));
+	o = s.option(form.Value, "multipath_weight", _("Weight"), _("Only used by *weight schedulers/path managers. Ignored if no weight scheduler is selected.") + '<br />' + _("A weight >100 make it more attractive, a weight <100 make it less attractive. Max 256"));
 	o.datatype = "uinteger";
 	o.rmempty = false;
 	o.default = 100;
 
-	return m.render().then(function(mapEl) {
-		function updateWeightVisibility() {
-			var schedulerEl = document.getElementById('widget.cbid.network.globals.mptcp_scheduler');
-			var val = schedulerEl ? schedulerEl.value : (uci.get('network', 'globals', 'mptcp_scheduler') || '');
-			var show = val.toLowerCase().indexOf('weight') > -1;
-
-			mapEl.querySelectorAll('[data-name="multipath_weight"]').forEach(function(el) {
-				var row = el.closest('.cbi-value') || el;
-				row.style.display = show ? '' : 'none';
-			});
-		}
-
-		var schedulerEl = document.getElementById('widget.cbid.network.globals.mptcp_scheduler');
-		if (schedulerEl) {
-			schedulerEl.addEventListener('change', updateWeightVisibility);
-		}
-		updateWeightVisibility();
-
-		return mapEl;
-	});
+	return m.render();
     }
 });

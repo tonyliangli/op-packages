@@ -1,18 +1,18 @@
+# IPTABLES backend
+
 method_ttl(){
 
 	ttl=${ttl:=64}
+	validate_ttl "$ttl"
+	[ -n "$iface" ] && validate_iface "$iface"
 
-	#case $(($ttl % 2)) in
-	#	0) TTL_INC=$(($ttl-1)) ;;
-	#	*) TTL_INC=$ttl ;;
-	#esac
 	TTL_INC=$(($ttl-1))
 
 	for T in $IPT; do
 		case $T in
 			iptables)
 				SUFFIX="TTL --ttl-set"
-				if [ $iface ]; then
+				if [ -n "$iface" ]; then
 					$T -t mangle -A TTLFIX -i $DEV -m ttl --ttl 1 -j TTL --ttl-inc $TTL_INC
 				else
 					$T -t mangle -A TTLFIX -m ttl --ttl 1 -j TTL --ttl-inc $TTL_INC
@@ -20,7 +20,7 @@ method_ttl(){
 			;;
 			ip6tables)
 				SUFFIX="HL --hl-set"
-				if [ $iface ]; then
+				if [ -n "$iface" ]; then
 					$T -t mangle -A TTLFIX -i $DEV -m hl --hl 1 -j HL --hl-inc $TTL_INC
 				else
 					$T -t mangle -A TTLFIX -m hl --hl 1 -j HL --hl-inc $TTL_INC
@@ -28,7 +28,7 @@ method_ttl(){
 			;;
 		esac
 
-		if [ $iface ]; then
+		if [ -n "$iface" ]; then
 			$T -t mangle -A TTL_OUT -o $DEV -j $SUFFIX $ttl
 			$T -t mangle -A TTL_POST -o $DEV -j $SUFFIX $ttl
 		else
@@ -40,6 +40,12 @@ method_ttl(){
 
 
 method_proxy(){
+	validate_ports "$ports"
+	[ -n "$proxy" ] && validate_proxy "$proxy"
+	[ -n "$iface" ] && validate_iface "$iface"
+
+	# check nat66 module
+	[ -f /lib/modules/$(uname -r)/ip6table_nat.ko ] || IPT="iptables"
 
 	for T in $IPT; do
 		[ "$proxy" ] && {
@@ -51,11 +57,11 @@ method_proxy(){
 	        } || {
 			case $T in
 				iptables)
-					IPADDR=$(ifstatus $ifn | jsonfilter -e '@["ipv4-address"][*]["address"]')
+					IPADDR=$(ifstatus "$ifn" | jsonfilter -e '@["ipv4-address"][*]["address"]')
 					END="${IPADDR}:3128"
 				;;
 				ip6tables)
-					for a in $(ifstatus $ifn | jsonfilter -e '@["ipv6-prefix-assignment"][*]["local-address"]["address"]'); do
+					for a in $(ifstatus "$ifn" | jsonfilter -e '@["ipv6-prefix-assignment"][*]["local-address"]["address"]'); do
 						IPADDR="$a"
 					done
 					END="[$IPADDR]:3128"
@@ -77,7 +83,7 @@ method_proxy(){
 					--dports 80,443 -j DNAT --to-destination $END
 			;;
 			*)
-				if [ $ports ]; then
+				if [ -n "$ports" ]; then
 					$T -t nat -A FIXPROXY ! -d ${IPADDR} \
 						! -s ${IPADDR} -p tcp -m multiport \
 						--dports $ports -j DNAT --to-destination $END
@@ -90,13 +96,6 @@ method_proxy(){
 		esac
 	done
 }
-
-# check nat66 module
-if [ -f /lib/modules/$(uname -r)/ip6table_nat.ko ]; then
-	IPT="iptables ip6tables"
-else
-	IPT="iptables"
-fi
 	
 # Create and flush mangle table
 for T in $IPT; do
@@ -121,32 +120,4 @@ for T in $IPT; do
 	for a in D I; do
 		$T -t nat -${a} PREROUTING -j PROXY
 	done
-done
-
-for s in $SECTIONS; do
-	if [ "$s" ]; then
-		get_vars
-	else
-		exit 0
-	fi
-
-        [ -n $iface ] && {
-                ifn=$iface
-        } || {
-                ifn=lan
-        }
-
-	case $inet in
-		ipv4) IPT="iptables" ;;
-		ipv6) IPT="ip6tables" ;;
-		*) IPT="iptables ip6tables";;
-	esac
-	if ! [ -f /lib/modules/$(uname -r)/ip6table_nat.ko ]; then
-		IPT="iptables"
-	fi
-	DEV=$(ifstatus $iface | jsonfilter -e '@["l3_device"]')
-	case $method in
-		ttl) method_ttl ;;
-		proxy) method_proxy ;;
-	esac
 done

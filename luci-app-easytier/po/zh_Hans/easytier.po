@@ -549,13 +549,13 @@ msgstr "官方服务器 - tcp://public.easytier.top:11010"
 msgid ""
 "Official Web Console: <a href=\"https://easytier.cn/web\" target=\"_blank"
 "\">https://easytier.cn/web</a><br>Official Configuration File Generator: <a "
-"href=\"https://easytier.cn/web/index.html#/config_generator\" target=\"_blank"
-"\">https://easytier.cn/web/index.html#/config_generator</a><br>Please note "
+"href=\"https://easytier.cn/assistant\" target=\"_blank"
+"\">https://easytier.cn/assistant</a><br>Please note "
 "to set the RPC port to 15888"
 msgstr ""
 "官方Web控制台：<a href='https://easytier.cn/web' target='_blank'>https://easytier.cn/web</a><br>"
-"官方配置文件生成器：<a href='https://easytier.cn/web/index.html#/config_generator' "
-"target='_blank'>https://easytier.cn/web/index.html#/config_generator</a><br>"
+"官方配置文件生成器：<a href='https://easytier.cn/assistant' "
+"target='_blank'>https://easytier.cn/assistant</a><br>"
 "注意配置RPC端口为15888"
 
 #: applications/luci-app-easytier/luasrc/model/cbi/easytier.lua:295
@@ -1266,6 +1266,15 @@ msgstr "统计数据"
 
 msgid "Command Line"
 msgstr "启动参数"
+
+msgid "Copy"
+msgstr "复制"
+
+msgid "Copied"
+msgstr "已复制"
+
+msgid "Duplicate extra parameter"
+msgstr "重复的额外参数"
 
 msgid "IPv4 Address"
 msgstr "IPv4地址"
@@ -2098,4 +2107,3 @@ msgstr "数据库重置成功"
 
 msgid "Restart service to apply changes?"
 msgstr "重启服务以生效？"
-

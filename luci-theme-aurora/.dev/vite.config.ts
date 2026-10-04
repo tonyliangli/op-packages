@@ -1,394 +1,244 @@
 /**
  * Copyright (C) 2025 eamonxg <eamonxiong@gmail.com>
  * Licensed under the Apache License, Version 2.0.
+ *
+ * Theme identity is in luci-theme.config.js. The dev/serve layer (local
+ * serve, mock pages, .ut sync, redirect) and the client router come from
+ * @eamonxg/luci-theme-devkit; only the build transforms that shape THIS
+ * theme's htdocs output stay here.
  */
 
 import tailwindcss from "@tailwindcss/vite";
-import { exec } from "child_process";
-import { watch as fsWatch } from "fs";
-import { mkdir, readdir, readFile, writeFile } from "fs/promises";
-import { basename, dirname, join, relative, resolve } from "path";
+import { luciRouter } from "@eamonxg/luci-theme-devkit/vite/router";
+import { luciDev, injectMockBar } from "@eamonxg/luci-theme-devkit/vite/dev";
+import browserslist from "browserslist";
+import { existsSync, readdirSync } from "fs";
+import { mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
+import {
+  browserslistToTargets,
+  transform as lightningcssTransform,
+} from "lightningcss";
+import { dirname, join, resolve } from "path";
 import { minify as terserMinify } from "terser";
-import { promisify } from "util";
 import { defineConfig, loadEnv, Plugin, ResolvedConfig } from "vite";
-
-const execAsync = promisify(exec);
+import config from "./luci-theme.config.js";
 
 const CURRENT_DIR = process.cwd();
 const PROJECT_ROOT = resolve(CURRENT_DIR, "..");
 const BUILD_OUTPUT = resolve(PROJECT_ROOT, "htdocs/luci-static");
+const PATCH_SRC_DIR = resolve(CURRENT_DIR, "src/media/patches");
 
-async function scanFiles(
-  dir: string,
-  extensions: string[] = [],
-): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
+const LIGHTNINGCSS_TARGETS = browserslistToTargets(
+  browserslist("chrome >= 111, edge >= 111, firefox >= 128, safari >= 16.4, ios_saf >= 16.4"),
+);
 
-  for (const entry of entries) {
-    const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await scanFiles(fullPath, extensions)));
-    } else if (
-      entry.isFile() &&
-      (!extensions.length || extensions.some((ext) => fullPath.endsWith(ext)))
-    ) {
-      files.push(fullPath);
-    }
-  }
-  return files;
-}
+// See luci-theme.config.js. Empty today: the log viewer needs only
+// admin-status-logs, whose prefix covers both log pages on every release.
+const PATCH_ALIASES: Record<string, string[]> = config.patchAliases ?? {};
+
+const tag = (name: string): string =>
+  `${new Date().toLocaleTimeString("en-US")} [${name}]`;
 
 function createLuciJsCompressPlugin(): Plugin {
   let outDir: string;
-  let jsFiles: string[] = [];
 
   return {
     name: "luci-js-compress",
     apply: "build",
-
     configResolved(config: ResolvedConfig) {
       outDir = config.build.outDir;
     },
-
-    async buildStart() {
-      const srcDir = resolve(CURRENT_DIR, "src/resource");
-      jsFiles = await scanFiles(srcDir, [".js"]);
-    },
-
     async generateBundle() {
-      for (const filePath of jsFiles) {
-        try {
-          const sourceCode = await readFile(filePath, "utf-8");
-          const compressed = await terserMinify(sourceCode, {
-            parse: { bare_returns: true },
-            compress: false,
-            mangle: false,
-            format: { comments: false, beautify: false },
-          });
-
-          const relativePath = relative(
-            resolve(CURRENT_DIR, "src/resource"),
-            filePath,
-          ).replace(/\\/g, "/");
-          const outputPath = join(outDir, "resources", relativePath);
-
-          await mkdir(dirname(outputPath), { recursive: true });
-          await writeFile(outputPath, compressed.code || sourceCode, "utf-8");
-        } catch (error: any) {
-          console.error(`JS compress failed: ${filePath}`, error?.message);
-        }
-      }
-    },
-  };
-}
-
-interface RouteConfig {
-  routes: Record<string, string>;
-  shouldRewrite: boolean;
-  hmrMessage: string;
-}
-
-interface ResourceConfig {
-  css: RouteConfig;
-  js: RouteConfig;
-}
-
-function createLocalServePlugin(): Plugin {
-  const resourceConfig: ResourceConfig = {
-    css: {
-      routes: {
-        "/luci-static/aurora/main.css": "/src/media/main.css",
-      },
-      shouldRewrite: true,
-      hmrMessage: "CSS file changed",
-    },
-    js: {
-      routes: {
-        "/luci-static/resources/view/aurora/sysauth.js":
-          "src/resource/view/aurora/sysauth.js",
-        "/luci-static/resources/menu-aurora.js": "src/resource/menu-aurora.js",
-      },
-      shouldRewrite: false,
-      hmrMessage: "JS file changed",
-    },
-  };
-
-  const buildHmrMap = (routes: Record<string, string>, isVitePath: boolean) => {
-    const map: Record<string, string> = {};
-    Object.entries(routes).forEach(([publicPath, sourcePath]) => {
-      const filePath = isVitePath
-        ? resolve(CURRENT_DIR, sourcePath.replace(/^\//, ""))
-        : resolve(CURRENT_DIR, sourcePath);
-      map[filePath.replace(/\\/g, "/")] = publicPath;
-    });
-    return map;
-  };
-
-  const cssHmrMap = buildHmrMap(resourceConfig.css.routes, true);
-  const jsHmrMap = buildHmrMap(resourceConfig.js.routes, false);
-
-  return {
-    name: "local-serve-plugin",
-    apply: "serve",
-    enforce: "pre",
-
-    configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
-        if (!req.url) return next();
-
-        const [pathname, search] = req.url.split("?");
-
-        const cssTarget = resourceConfig.css.routes[pathname];
-        if (cssTarget) {
-          req.url = cssTarget + (search ? `?${search}` : "");
-          return next();
-        }
-
-        const jsPath = resourceConfig.js.routes[pathname];
-        if (jsPath) {
+      const srcDir = resolve(CURRENT_DIR, "src/resource");
+      const jsFiles = (await readdir(srcDir, { recursive: true })).filter((f) =>
+        f.endsWith(".js"),
+      );
+      await Promise.all(
+        jsFiles.map(async (relPath) => {
+          const normalized = relPath.replace(/\\/g, "/");
           try {
-            const file = resolve(CURRENT_DIR, jsPath);
-            const code = await readFile(file, "utf-8");
-            res.setHeader("Content-Type", "text/javascript");
-            res.setHeader("Cache-Control", "no-store");
-            res.statusCode = 200;
-            res.end(code);
-            return;
-          } catch (err) {
-            console.error(`[JS Error] Failed to read ${jsPath}:`, err);
+            const sourceCode = await readFile(join(srcDir, relPath), "utf-8");
+            const compressed = await terserMinify(sourceCode, {
+              parse: { bare_returns: true },
+              /* LuCI dependency declarations are string directives. Keep
+                 them while enabling normal compression and local mangling. */
+              compress: { directives: false, passes: 2 },
+              mangle: true,
+              format: { comments: false, beautify: false },
+            });
+            // patches/* are payloads of the on-demand patches mechanism and
+            // ship next to the CSS patches (media dir), not under resources/.
+            const stem = normalized.startsWith("patches/")
+              ? normalized.slice("patches/".length, -".js".length)
+              : null;
+            const outputPaths = stem
+              ? [stem, ...(PATCH_ALIASES[stem] ?? [])].map((p) =>
+                  join(outDir, "aurora", "patches", `${p}.js`),
+                )
+              : [join(outDir, "resources", normalized)];
+            for (const outputPath of outputPaths) {
+              await mkdir(dirname(outputPath), { recursive: true });
+              await writeFile(
+                outputPath,
+                compressed.code || sourceCode,
+                "utf-8",
+              );
+            }
+          } catch (error: any) {
+            console.error(
+              `${tag("JS Compress")} src/resource/${normalized}: ${error?.message}`,
+            );
           }
-        }
-
-        next();
-      });
+        }),
+      );
     },
+  };
+}
 
-    handleHotUpdate({ file, server }) {
-      const normalizedFile = file.replace(/\\/g, "/");
-
-      const resources = [
-        { map: cssHmrMap, config: resourceConfig.css },
-        { map: jsHmrMap, config: resourceConfig.js },
-      ];
-
-      for (const { map, config } of resources) {
-        const publicPath = map[normalizedFile];
-        if (publicPath) {
-          console.log(`[HMR] ${config.hmrMessage}: ${publicPath} (tracked: ${normalizedFile})`);
-          server.ws.send({ type: "full-reload", path: "*" });
-          return [];
-        }
+/* Duplicate built CSS patches under their PATCH_ALIASES names (JS aliases are
+   handled inside the compress plugin). Runs post-bundle because the sources
+   are Rollup entries. */
+function createPatchAliasPlugin(): Plugin {
+  return {
+    name: "patch-alias",
+    apply: "build",
+    enforce: "post",
+    async closeBundle() {
+      for (const [stem, aliases] of Object.entries(PATCH_ALIASES)) {
+        const source = resolve(BUILD_OUTPUT, `aurora/patches/${stem}.css`);
+        if (!existsSync(source)) continue;
+        const css = await readFile(source, "utf-8");
+        for (const alias of aliases)
+          await writeFile(
+            resolve(BUILD_OUTPUT, `aurora/patches/${alias}.css`),
+            css,
+            "utf-8",
+          );
       }
     },
   };
 }
 
-const UT_TEMPLATE_DIR = resolve(PROJECT_ROOT, "ucode/template/themes/aurora");
-const UT_REMOTE_DIR = "/usr/share/ucode/luci/template/themes/aurora";
-
-interface ScpConfig {
-  host: string;
-  key?: string;
-}
-
-function buildSshArgs(cfg: ScpConfig): string {
-  const args = ["-o StrictHostKeyChecking=no", "-o UserKnownHostsFile=/dev/null"];
-  if (cfg.key) args.push(`-i "${cfg.key}"`);
-  return args.join(" ");
-}
-
-function buildScpCommand(localPath: string, remotePath: string, cfg: ScpConfig): string {
-  return `scp ${buildSshArgs(cfg)} "${localPath}" "${cfg.host}:${remotePath}"`;
-}
-
-function parseHost(sshHost: string): string {
-  const atIndex = sshHost.lastIndexOf("@");
-  return atIndex !== -1 ? sshHost.slice(atIndex + 1) : sshHost;
-}
-
-async function checkSshConnection(cfg: ScpConfig): Promise<boolean> {
-  const host = parseHost(cfg.host);
-
-  try {
-    await execAsync(`ssh ${buildSshArgs(cfg)} -o ConnectTimeout=5 "${cfg.host}" echo ok`);
-    console.log(`[UT Sync] SSH connection verified.`);
-    return true;
-  } catch (err: any) {
-    const stderr = err?.stderr || err?.message || "";
-
-    if (stderr.includes("Host key verification failed") || stderr.includes("REMOTE HOST IDENTIFICATION HAS CHANGED")) {
-      console.error(`\n[UT Sync] SSH host key mismatch for ${host}.`);
-      console.error(`[UT Sync] The device may have been reflashed. Run this to fix:\n`);
-      console.error(`  ssh-keygen -R ${host}\n`);
-      console.error(`[UT Sync] Then restart the dev server.\n`);
-    } else if (stderr.includes("Permission denied") || stderr.includes("Authentication failed")) {
-      console.error(`\n[UT Sync] SSH authentication failed for ${cfg.host}.`);
-      console.error(`[UT Sync] Copy your public key to the device:\n`);
-      console.error(`  cat ~/.ssh/id_ed25519.pub | ssh ${cfg.host} "cat >> /etc/dropbear/authorized_keys"\n`);
-    } else if (stderr.includes("Connection refused") || stderr.includes("Connection timed out") || stderr.includes("No route to host")) {
-      console.error(`\n[UT Sync] Cannot reach ${host}. Check that the device is online and SSH is enabled.\n`);
-    } else {
-      console.error(`\n[UT Sync] SSH connection failed: ${stderr}\n`);
-    }
-
-    return false;
+async function removeMacOsMetadata(dir: string): Promise<void> {
+  if (!existsSync(dir)) return;
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) await removeMacOsMetadata(path);
+    else if (entry.name === ".DS_Store") await rm(path, { force: true });
   }
 }
 
-function createUtSyncPlugin(cfg: ScpConfig): Plugin {
-  let syncing = false;
-  let connected = false;
-
+/* login.css imports the full shared token sheet but the login page consumes
+   only a fraction of it. Prune every custom-property declaration (and --tw-*
+   @property registration) that no var() reference can reach, following
+   declaration-value chains (--a: var(--b) keeps --b alive). --login-bg and
+   --login-bg-lqip stay consumed-without-declaration by design: header.ut
+   injects them from UCI at render time, so pruning never touches consumers. */
+function createLoginCssPrunePlugin(): Plugin {
   return {
-    name: "ut-sync-plugin",
-    apply: "serve",
+    name: "login-css-prune",
+    apply: "build",
+    enforce: "post",
+    async closeBundle() {
+      const path = resolve(BUILD_OUTPUT, "aurora/login.css");
+      if (!existsSync(path)) return;
+      const css = await readFile(path, "utf-8");
 
-    configureServer(server) {
-      if (!cfg.host) {
-        console.log("[UT Sync] Disabled: VITE_OPENWRT_SSH_HOST not set in .env");
-        return;
+      // Roots are vars consumed by normal declarations; custom-property
+      // declarations only contribute edges to the reachability walk.
+      const VALUE = `(?:"[^"]*"|'[^']*'|[^;{}"'])*`;
+      const roots = new Set<string>();
+      const edges = new Map<string, Set<string>>();
+      for (const [, name, value] of css.matchAll(
+        new RegExp(`(?<=[{;])(--[\\w-]+|[a-zA-Z-]+):(${VALUE})`, "g"),
+      )) {
+        const refs = [...value.matchAll(/var\(\s*(--[\w-]+)/g)].map(
+          (m) => m[1],
+        );
+        if (!name.startsWith("--")) refs.forEach((r) => roots.add(r));
+        else {
+          const deps = edges.get(name) ?? new Set<string>();
+          refs.forEach((r) => deps.add(r));
+          edges.set(name, deps);
+        }
+      }
+      const keep = new Set(roots);
+      const stack = [...roots];
+      while (stack.length) {
+        for (const dep of edges.get(stack.pop()!) ?? []) {
+          if (!keep.has(dep)) {
+            keep.add(dep);
+            stack.push(dep);
+          }
+        }
       }
 
-      const authInfo = cfg.key ? `key (${cfg.key})` : "ssh-agent/config";
-      console.log(`[UT Sync] Watching ${UT_TEMPLATE_DIR}`);
-      console.log(`[UT Sync] Target: ${cfg.host}:${UT_REMOTE_DIR} (auth: ${authInfo})`);
+      const pruned = css
+        .replace(
+          new RegExp(`(?<=[{;])(--[\\w-]+):${VALUE};?`, "g"),
+          (decl, name) => (keep.has(name) ? decl : ""),
+        )
+        .replace(/@property\s+(--[\w-]+)\{[^{}]*\}/g, (rule, name) =>
+          keep.has(name) ? rule : "",
+        );
 
-      checkSshConnection(cfg).then((ok) => {
-        if (!ok) return;
-        connected = true;
-
-        const watcher = fsWatch(UT_TEMPLATE_DIR, (eventType, filename) => {
-          if (!filename?.endsWith(".ut") || eventType !== "change") return;
-          if (syncing) return;
-
-          syncing = true;
-          const filePath = join(UT_TEMPLATE_DIR, filename);
-          const remotePath = `${UT_REMOTE_DIR}/${filename}`;
-          const cmd = buildScpCommand(filePath, remotePath, cfg);
-
-          console.log(`[UT Sync] Syncing ${filename} → ${cfg.host}:${remotePath}`);
-          execAsync(cmd)
-            .then(() => {
-              console.log(`[UT Sync] Done. Reloading browser.`);
-              server.ws.send({ type: "full-reload", path: "*" });
-            })
-            .catch((err: any) => {
-              console.error(`[UT Sync] Failed to sync ${filename}:`, err?.message);
-            })
-            .finally(() => {
-              syncing = false;
-            });
-        });
-
-        server.httpServer?.on("close", () => watcher.close());
+      // Re-minify with the shared targets: validates the edited syntax and
+      // drops any rule the pruning emptied out.
+      const { code } = lightningcssTransform({
+        filename: "login.css",
+        code: Buffer.from(pruned),
+        minify: true,
+        targets: LIGHTNINGCSS_TARGETS,
       });
+      await writeFile(path, code);
     },
   };
 }
 
-function createRedirectPlugin(): Plugin {
+function createPackageHygienePlugin(): Plugin {
   return {
-    name: "redirect-plugin",
-    apply: "serve",
-
-    configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        if (req.url === "/" || req.url === "/index.html") {
-          res.writeHead(302, { Location: "/cgi-bin/luci" });
-          res.end();
-          return;
-        }
-        next();
-      });
+    name: "package-hygiene",
+    apply: "build",
+    enforce: "post",
+    async closeBundle() {
+      await Promise.all([
+        removeMacOsMetadata(resolve(PROJECT_ROOT, "htdocs")),
+        removeMacOsMetadata(resolve(PROJECT_ROOT, "ucode")),
+      ]);
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, CURRENT_DIR, "");
-  const OPENWRT_HOST = env.VITE_OPENWRT_HOST || "http://192.168.1.1:80";
-  const OPENWRT_SSH_HOST = env.VITE_OPENWRT_SSH_HOST || "";
-  const OPENWRT_SSH_KEY = env.VITE_OPENWRT_SSH_KEY || "";
+  const env = loadEnv(mode, CURRENT_DIR);
+  // VITE_OPENWRT_HOST is just the router address — a bare IP/hostname like
+  // 192.168.1.1 (host:port and http:// URL forms also work). The web proxy
+  // target and the .ut-sync ssh target are both derived from it; ssh key
+  // selection etc. belongs in ~/.ssh/config, not here.
+  const OPENWRT_RAW = env.VITE_OPENWRT_HOST || "192.168.1.1";
+  const OPENWRT = new URL(
+    /^https?:\/\//.test(OPENWRT_RAW) ? OPENWRT_RAW : `http://${OPENWRT_RAW}`,
+  );
+  const OPENWRT_URL = OPENWRT.origin;
+  const OPENWRT_SSH_HOST = `root@${OPENWRT.hostname}`;
   const DEV_HOST = env.VITE_DEV_HOST || "127.0.0.1";
   const DEV_PORT = Number(env.VITE_DEV_PORT) || 5173;
-
-  const proxyConfig = {
-    "/luci-static": {
-      target: OPENWRT_HOST,
-      changeOrigin: true,
-      secure: false,
-    },
-    "/cgi-bin": {
-      target: OPENWRT_HOST,
-      changeOrigin: true,
-      secure: false,
-      configure: (proxy: any) => {
-        proxy.on("proxyRes", (proxyRes: any, req: any, res: any) => {
-          const contentType = proxyRes.headers["content-type"] || "";
-
-          if (contentType.includes("text/html")) {
-            const chunks: Buffer[] = [];
-
-            proxyRes.on("data", (chunk: Buffer) => {
-              chunks.push(chunk);
-            });
-
-            proxyRes.on("end", () => {
-              let html = Buffer.concat(chunks).toString("utf-8");
-
-              const viteClient = `<script type="module" src="/@vite/client"></script>`;
-              if (html.includes("</head>") && !html.includes("/@vite/client")) {
-                html = html.replace("</head>", `${viteClient}\n\t</head>`);
-                console.log("[HMR] Injected Vite client into proxied HTML");
-              }
-
-              res.removeAllListeners("end");
-
-              res.setHeader("Content-Length", Buffer.byteLength(html));
-              res.end(html);
-            });
-
-            proxyRes.pipe = () => proxyRes;
-          }
-        });
-      },
-    },
-  } as const;
-
-  const aliasConfig = {
-    "@": resolve(CURRENT_DIR, "src"),
-    "@assets": resolve(CURRENT_DIR, "src/assets"),
-  } as const;
 
   return {
     plugins: [
       tailwindcss(),
-      createRedirectPlugin(),
-      createLocalServePlugin(),
-      createUtSyncPlugin({ host: OPENWRT_SSH_HOST, key: OPENWRT_SSH_KEY }),
+      luciRouter({ name: config.name }),
+      ...luciDev(config, { sshHost: OPENWRT_SSH_HOST }),
       createLuciJsCompressPlugin(),
+      createLoginCssPrunePlugin(),
+      createPatchAliasPlugin(),
+      createPackageHygienePlugin(),
     ],
-
     css: {
-      postcss: {
-        plugins: [
-          {
-            postcssPlugin: "remove-layers",
-            Once(root) {
-              function removeLayers(node: any) {
-                node.walkAtRules("layer", (rule: any) => {
-                  removeLayers(rule);
-                  rule.replaceWith(rule.nodes);
-                });
-              }
-              removeLayers(root);
-            },
-          },
-        ],
+      lightningcss: {
+        targets: LIGHTNINGCSS_TARGETS,
       },
     },
-
     build: {
       outDir: BUILD_OUTPUT,
       emptyOutDir: false,
@@ -396,24 +246,89 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: resolve(CURRENT_DIR, "src/media/main.css"),
+          login: resolve(CURRENT_DIR, "src/media/login.css"),
+          // On-demand third-party patches: one entry per page, output to
+          // aurora/patches/<page>.css (the `patches/` key prefix lands them there
+          // via assetFileNames below). header.ut links the matching one per page.
+          // `_`-prefixed files are shared partials @imported by entries, not
+          // entries themselves (they'd otherwise ship as never-matching patches).
+          ...Object.fromEntries(
+            (existsSync(PATCH_SRC_DIR) ? readdirSync(PATCH_SRC_DIR) : [])
+              .filter((f) => f.endsWith(".css") && !f.startsWith("_"))
+              .map((f) => [`patches/${f.slice(0, -4)}`, join(PATCH_SRC_DIR, f)]),
+          ),
         },
-        output: {
-          assetFileNames: "aurora/[name].[ext]",
-        },
+        output: { assetFileNames: "aurora/[name].[ext]" },
       },
     },
-
     server: {
       host: DEV_HOST,
       port: DEV_PORT,
-      proxy: proxyConfig,
-      headers: {
-        "Cache-Control": "no-store",
+      proxy: {
+        "/luci-static": {
+          target: OPENWRT_URL,
+          changeOrigin: true,
+          secure: false,
+        },
+        "/cgi-bin": {
+          target: OPENWRT_URL,
+          changeOrigin: true,
+          secure: false,
+          // We write every response ourselves in `proxyRes` below, so the Vite
+          // client can be injected into proxied LuCI HTML.
+          selfHandleResponse: true,
+          configure: (proxy) => {
+            // Force an uncompressed upstream response: the HTML injection below
+            // treats the body as UTF-8 text and would corrupt a gzipped payload.
+            proxy.on("proxyReq", (proxyReq) => {
+              proxyReq.removeHeader("accept-encoding");
+            });
+            proxy.on("proxyRes", (proxyRes, req, res) => {
+              const status = proxyRes.statusCode ?? 200;
+              const ct = proxyRes.headers["content-type"] || "";
+              if (!ct.includes("text/html")) {
+                res.writeHead(status, proxyRes.headers);
+                proxyRes.pipe(res);
+                return;
+              }
+              const chunks: Buffer[] = [];
+              proxyRes.on("data", (c: Buffer) => chunks.push(c));
+              proxyRes.on("end", () => {
+                let html = Buffer.concat(chunks).toString("utf-8");
+                const client = `<script type="module" src="/@vite/client"></script>`;
+                if (
+                  html.includes("</head>") &&
+                  !html.includes("/@vite/client")
+                ) {
+                  html = html.replace("</head>", `${client}\n\t</head>`);
+                }
+                // Real device pages also get the mock bar, so the snapshot
+                // workflow is one click away instead of a URL to remember:
+                // it lists what .dev/mocks/ holds, opens this page's own
+                // snapshot when there is one, and captures the open page
+                // (same as Alt/Option+Shift+S). `current` is null — a live
+                // page is not itself a snapshot.
+                if (html.includes("</head>") && !html.includes("/__bar.js")) {
+                  html = injectMockBar(html, null);
+                }
+                const { "transfer-encoding": _, ...headers } = proxyRes.headers;
+                res.writeHead(status, {
+                  ...headers,
+                  "content-length": Buffer.byteLength(html),
+                });
+                res.end(html);
+              });
+            });
+          },
+        },
       },
+      headers: { "Cache-Control": "no-store" },
     },
-
     resolve: {
-      alias: aliasConfig,
+      alias: {
+        "@": resolve(CURRENT_DIR, "src"),
+        "@assets": resolve(CURRENT_DIR, "src/assets"),
+      },
     },
   };
 });

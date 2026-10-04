@@ -1,16 +1,60 @@
+--- a/luci-mod-status/htdocs/luci-static/resources/view/status/index.js
++++ b/luci-mod-status/htdocs/luci-static/resources/view/status/index.js
+@@ -2,6 +2,7 @@
+ 'require view';
+ 'require dom';
+ 'require poll';
++'require fs';
+ 'require network';
+ 'require ui';
+ 
+@@ -278,26 +279,14 @@ return view.extend({
+ 	},
+ 
+ 	load: function() {
+-		var includeModules = [
+-			{ name: 'view.status.include.10_system' },
+-			{ name: 'view.status.include.15_ports', title: _('Port status'), deferFirstLoad: true },
+-			{ name: 'view.status.include.20_memory' },
+-			{ name: 'view.status.include.25_storage' },
+-			{ name: 'view.status.include.30_network' },
+-			{ name: 'view.status.include.40_dhcp', title: _('Online Hosts'), deferFirstLoad: true },
+-			{ name: 'view.status.include.50_dsl' },
+-			{ name: 'view.status.include.60_wifi' }
+-		];
+-
+-		return Promise.all(includeModules.map(L.bind(function(spec) {
+-			if (spec.deferFirstLoad)
+-				return this.wrapDeferredInclude(spec);
+-
+-			return L.resolveDefault(L.require(spec.name), null);
+-		}, this))).then(function(includes) {
+-			return includes.filter(function(include) {
+-				return include != null;
+-			});
++		return L.resolveDefault(fs.list('/www' + L.resource('view/status/include')), []).then(function(entries) {
++			return Promise.all(entries.filter(function(e) {
++				return (e.type == 'file' && e.name.match(/\.js$/));
++			}).map(function(e) {
++				return 'view.status.include.' + e.name.replace(/\.js$/, '');
++			}).sort().map(function(n) {
++				return L.require(n);
++			}));
+ 		});
+ 	},
+
+
 --- a/luci-mod-status/htdocs/luci-static/resources/view/status/include/20_memory.js
 +++ b/luci-mod-status/htdocs/luci-static/resources/view/status/include/20_memory.js
-@@ -32,8 +32,7 @@ return baseclass.extend({
- 		    swap = L.isObject(systeminfo.swap) ? systeminfo.swap : {};
+@@ -36,14 +36,14 @@ return baseclass.extend({
+ 			available = Math.min(mem.total ?? Infinity, Math.max(0, available + (mem.buffered || 0)));
  
  		var fields = [
--			_('Total Available'), (mem.available) ? mem.available : (mem.total && mem.free && mem.buffered) ? mem.free + mem.buffered : null, mem.total,
--			_('Used'),            (mem.total && mem.free) ? (mem.total - mem.free) : null, mem.total,
-+			_('Used'),            (mem.total && mem.available) ? (mem.total - mem.free - mem.buffered - mem.cached) : null, mem.total,
+-			_('Total Available'), available, mem.total,
++			_('Used'), (mem.total && mem.available) ? (mem.total - available): null, mem.total,
  		];
  
- 		if (mem.buffered)
-@@ -43,7 +42,7 @@ return baseclass.extend({
+ 		if (mem.cached)
  			fields.push(_('Cached'), mem.cached, mem.total);
  
  		if (swap.total > 0)
@@ -20,50 +64,18 @@
  		var table = E('table', { 'class': 'table' });
  
 
---- a/luci-mod-status/htdocs/luci-static/resources/view/status/index.js
-+++ b/luci-mod-status/htdocs/luci-static/resources/view/status/index.js
-@@ -280,6 +280,7 @@ return view.extend({
- 	load: function() {
- 		var includeModules = [
- 			{ name: 'view.status.include.10_system' },
-+			{ name: 'view.status.include.19_cpu' },
- 			{ name: 'view.status.include.15_ports', title: _('Port status'), deferFirstLoad: true },
- 			{ name: 'view.status.include.20_memory' },
- 			{ name: 'view.status.include.25_storage' },
-
 --- a/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
 +++ b/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js
-@@ -33,9 +33,9 @@ var callCPUInfo = rpc.declare({
- 	method: 'getCPUInfo'
- });
+@@ -36,7 +36,7 @@ var callCPUInfo = rpc.declare({
  
--var callCPUUsage = rpc.declare({
-+var callTempInfo = rpc.declare({
+ var callCPUUsage = rpc.declare({
  	object: 'luci',
 -	method: 'getCPUUsage'
 +	method: 'getTempInfo'
  });
  
  return baseclass.extend({
-@@ -48,7 +48,7 @@ return baseclass.extend({
- 			L.resolveDefault(callSystemInfo(), {}),
- 			L.resolveDefault(callCPUBench(), {}),
- 			L.resolveDefault(callCPUInfo(), {}),
--			L.resolveDefault(callCPUUsage(), {}),
-+			L.resolveDefault(callTempInfo(), {}),
- 			L.resolveDefault(callLuciVersion(), { revision: _('unknown version'), branch: 'LuCI' }),
- 			L.resolveDefault(callGetUnixtime(), 0)
- 		]);
-@@ -59,7 +59,7 @@ return baseclass.extend({
- 		    systeminfo  = data[1],
- 		    cpubench    = data[2],
- 		    cpuinfo     = data[3],
--		    cpuusage    = data[4],
-+			tempinfo    = data[4],
- 		    luciversion = data[5],
- 		    unixtime    = data[6];
- 
-@@ -78,8 +78,7 @@ return baseclass.extend({
+@@ -85,15 +85,9 @@ return baseclass.extend({
  
  		var fields = [
  			_('Hostname'),         boardinfo.hostname,
@@ -71,9 +83,17 @@
 -			_('Architecture'),     cpuinfo.cpuinfo || boardinfo.system,
 +			_('Architecture'),     (cpuinfo.cpuinfo || boardinfo.system) + ' ' + cpubench.cpubench,
  			_('Target Platform'),  (L.isObject(boardinfo.release) ? boardinfo.release.target : ''),
- 			_('Firmware Version'), (L.isObject(boardinfo.release)
- 				? '%s%s / '.format(
-@@ -94,10 +93,18 @@ return baseclass.extend({
+-			_('Firmware Version'), (L.isObject(boardinfo.release)
+-				? '%s%s / '.format(
+-					boardinfo.release.description || '',
+-					boardinfo.release.revision ? boardinfo.release.revision : ''
+-				)
+-				: '') + (luciversion || ''),
++			_('Firmware Version'), (L.isObject(boardinfo.release) ? boardinfo.release.description + ' / ' : '') + (luciversion || ''),
+ 			_('Kernel Version'),   boardinfo.kernel,
+ 			_('Local Time'),       datestr,
+ 			_('Uptime'),           systeminfo.uptime ? '%t'.format(systeminfo.uptime) : null,
+@@ -101,10 +95,18 @@ return baseclass.extend({
  				systeminfo.load[0] / 65535.0,
  				systeminfo.load[1] / 65535.0,
  				systeminfo.load[2] / 65535.0
@@ -82,9 +102,9 @@
 +			) : null
  		];
  
-+		if (tempinfo.tempinfo) {
++		if (cpuusage.tempinfo) {
 +			fields.splice(6, 0, _('Temperature'));
-+			fields.splice(7, 0, tempinfo.tempinfo);
++			fields.splice(7, 0, cpuusage.tempinfo);
 +		}
 +		if (boardinfo.model != "Default string Default string") {
 +			fields.splice(2, 0, _('Model'));
@@ -105,3 +125,7 @@
  				E('button', {
  					'class': 'btn cbi-button',
  					'click': function() { location.href = 'nftables/iptables' }
+diff --git a/luci-mod-status/htdocs/luci-static/resources/view/status/include/15_ports.js b/luci-mod-status/htdocs/luci-static/resources/view/status/include/26_ports.js
+similarity index 100%
+rename from luci-mod-status/htdocs/luci-static/resources/view/status/include/15_ports.js
+rename to luci-mod-status/htdocs/luci-static/resources/view/status/include/26_ports.js

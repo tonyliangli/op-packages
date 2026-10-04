@@ -1,0 +1,26 @@
+#!/bin/sh
+
+[ -z "$(uci -q get easytier.settings.machine_id)" ] && {
+	new_uuid=""
+	if [ -f /proc/sys/kernel/random/uuid ]; then
+		new_uuid=$(cat /proc/sys/kernel/random/uuid 2>/dev/null)
+	fi
+	if [ -z "$new_uuid" ]; then
+		new_uuid=$(tr -dc 'a-f0-9' < /dev/urandom 2>/dev/null | head -c 32 | sed -r 's/(.{8})(.{4})(.{4})(.{4})(.{12})/\1-\2-\3-\4-\5/')
+	fi
+	if [ -n "$new_uuid" ]; then
+		uci -q set easytier.settings.machine_id="$new_uuid"
+	fi
+
+	# 检测 SoC 是否支持硬件 AES 加速，不支持则切换默认加密算法为 chacha20-poly1305
+	if ! grep -q -i -E '^(flags|Features)[[:space:]]*:.*[[:space:]]aes([[:space:]]|$)' /proc/cpuinfo 2>/dev/null; then
+		uci -q set easytier.settings.encryption_algorithm='chacha20-poly1305'
+	fi
+
+	uci -q commit easytier
+}
+
+rm -f /tmp/luci-indexcache* 2>/dev/null
+rm -f /tmp/luci-modulecache/* 2>/dev/null
+
+exit 0

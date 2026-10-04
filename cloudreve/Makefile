@@ -5,23 +5,25 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cloudreve
-PKG_VERSION:=4.15.0
-PKG_RELEASE:=4
+PKG_VERSION:=4.19.1
+PKG_RELEASE:=20
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/cloudreve/Cloudreve.git
-PKG_SOURCE_VERSION:=5994f7864f419813ba4cb5d260bd9e784a764599
+PKG_SOURCE_VERSION:=a8becb9f5b226024c83230bc52857c04966e2c30
 PKG_MIRROR_HASH:=skip
 
 PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=Tianling Shen <cnsztl@immortalwrt.org>
+PKG_CPE_ID:=cpe:/a:cloudreve:cloudreve
 
 PKG_BUILD_DEPENDS:=golang/host node/host node-yarn/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
 
 GO_PKG:=github.com/cloudreve/Cloudreve/v4
+GO_PKG_EXCLUDES:=pkg/request/ssrftest
 GO_PKG_LDFLAGS_X:= \
 	$(GO_PKG)/application/constants.BackendVersion=$(PKG_VERSION) \
 	$(GO_PKG)/application/constants.LastCommit=$(PKG_VERSION)

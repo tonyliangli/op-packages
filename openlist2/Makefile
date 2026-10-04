@@ -1,15 +1,15 @@
 #
 # Copyright (C) 2015-2016 OpenWrt.org
 #
-# This is free software, licensed under the GNU General Public License v3.
+# This is free software, licensed under the GNU Affero General Public License v3.
 #
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=openlist2
-PKG_VERSION:=4.2.1
-PKG_WEB_VERSION:=4.2.1
-PKG_RELEASE:=3
+PKG_VERSION:=4.2.6
+PKG_WEB_VERSION:=4.2.6
+PKG_RELEASE:=17
 
 PKG_SOURCE:=openlist-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/OpenListTeam/OpenList/tar.gz/v$(PKG_VERSION)?
@@ -17,12 +17,13 @@ PKG_HASH:=skip
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/OpenList-$(PKG_VERSION)
 
-PKG_LICENSE:=GPL-3.0
-PKG_LICENSE_FILE:=LICENSE
+PKG_LICENSE:=AGPL-3.0-only
+PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=sbwml <admin@cooluc.com>
+PKG_CPE_ID:=cpe:/a:oplist:openlist
 
 define Download/openlist-frontend
-  FILE:=openlist-frontend-dist-lite-v$(PKG_WEB_VERSION).tar.gz
+  FILE:=openlist-frontend-dist-v$(PKG_WEB_VERSION).tar.gz
   URL:=https://github.com/OpenListTeam/OpenList-Frontend/releases/download/v$(PKG_WEB_VERSION)/
   HASH:=skip
 endef
@@ -32,18 +33,15 @@ PKG_BUILD_PARALLEL:=1
 PKG_USE_MIPS16:=0
 PKG_BUILD_FLAGS:=no-mips16
 
-GO_PKG:=github.com/OpenListTeam/OpenList
+GO_PKG:=github.com/OpenListTeam/OpenList/v4
 GO_PKG_LDFLAGS:= \
-	-X '$(GO_PKG)/v4/internal/conf.BuiltAt=$(shell date '+%Y-%m-%d %H:%M:%S %z')' \
-	-X '$(GO_PKG)/v4/internal/conf.GoVersion=$(shell $(STAGING_DIR_HOSTPKG)/bin/go version | sed 's/go version //')' \
-	-X '$(GO_PKG)/v4/internal/conf.GitAuthor=The OpenList Projects Contributors <noreply@openlist.team>' \
-	-X '$(GO_PKG)/v4/internal/conf.GitCommit=tarball/$(shell echo $(PKG_HASH) | cut -c 1-7)' \
-	-X '$(GO_PKG)/v4/internal/conf.Version=v$(PKG_VERSION) (OpenWrt $(ARCH_PACKAGES))' \
-	-X '$(GO_PKG)/v4/internal/conf.WebVersion=v$(PKG_WEB_VERSION)'
-ifneq ($(CONFIG_ARCH_64BIT),y)
-  GO_PKG_EXCLUDES:=drivers/lark
-endif
-
+	-s -w \
+	-X '$(GO_PKG)/internal/conf.BuiltAt=$(shell date '+%Y-%m-%d %H:%M:%S %z')' \
+	-X '$(GO_PKG)/internal/conf.GoVersion=$(shell $(STAGING_DIR_HOSTPKG)/bin/go version | sed 's/go version //')' \
+	-X '$(GO_PKG)/internal/conf.GitAuthor=The OpenList Projects Contributors <noreply@openlist.team>' \
+	-X '$(GO_PKG)/internal/conf.GitCommit=tarball/$(shell echo $(PKG_HASH) | cut -c 1-7)' \
+	-X '$(GO_PKG)/internal/conf.Version=v$(PKG_VERSION) (OpenWrt $(ARCH_PACKAGES))' \
+	-X '$(GO_PKG)/internal/conf.WebVersion=v$(PKG_WEB_VERSION)'
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
@@ -52,12 +50,13 @@ define Package/openlist2
   CATEGORY:=Network
   SUBMENU:=Web Servers/Proxies
   TITLE:=A file list program that supports multiple storage
-  URL:=https://openlist.team/
-  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle
+  URL:=https://doc.oplist.org/
+  DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle +coreutils-stat +coreutils-timeout +jshn +jsonfilter +openssl-util
+  PROVIDES:=openlist2-helper openlist2-tls
 endef
 
 define Package/openlist2/conffiles
-/etc/openlist2
+/etc/openlist2/
 /etc/config/openlist2
 endef
 
@@ -73,25 +72,28 @@ ifeq ($(ARCH),arm)
   endif
 endif
 
-ifneq ($(CONFIG_USE_MUSL),)
-  TARGET_CFLAGS += -D_LARGEFILE64_SOURCE
-endif
-
 define Build/Prepare
 	$(call Build/Prepare/Default)
-	$(TAR) --strip-components=1 -C $(PKG_BUILD_DIR)/public/dist -xzf $(DL_DIR)/openlist-frontend-dist-lite-v$(PKG_WEB_VERSION).tar.gz
+	mkdir -p $(PKG_BUILD_DIR)/public/dist
+	$(TAR) --strip-components=1 -C $(PKG_BUILD_DIR)/public/dist -xzf $(DL_DIR)/openlist-frontend-dist-v$(PKG_WEB_VERSION).tar.gz
 	$(SED) 's_https://res.oplist.org/logo_/assets_g' $(PKG_BUILD_DIR)/public/dist/index.html
 	$(SED) 's_https://res.oplist.org/logo_/assets_g' $(PKG_BUILD_DIR)/public/dist/static/manifest.json
+	find $(PKG_BUILD_DIR)/public/dist/assets -type f -name '*.js' -exec $(SED) 's_https://res.oplist.org/logo_/assets_g' {} +
 endef
 
 define Package/openlist2/install
 	$(call GoPackage/Package/Install/Bin,$(PKG_INSTALL_DIR))
 	$(INSTALL_DIR) $(1)/usr/bin
 	$(INSTALL_BIN) $(PKG_INSTALL_DIR)/usr/bin/OpenList $(1)/usr/bin/openlist2
-	$(INSTALL_DIR) $(1)/etc/config $(1)/etc/init.d $(1)/etc/openlist2
+	$(INSTALL_DIR) $(1)/etc/config $(1)/etc/init.d $(1)/etc/openlist2 $(1)/etc/uci-defaults
+	$(INSTALL_DIR) $(1)/usr/libexec $(1)/usr/share/openlist2
 	$(INSTALL_CONF) $(CURDIR)/files/openlist2.config $(1)/etc/config/openlist2
 	$(INSTALL_BIN) $(CURDIR)/files/openlist2.init $(1)/etc/init.d/openlist2
-	$(INSTALL_DATA) $(CURDIR)/files/data.db $(1)/etc/openlist2/data.db
+	$(INSTALL_DATA) $(CURDIR)/files/openlist2.common $(1)/usr/share/openlist2/functions.sh
+	$(INSTALL_DATA) $(CURDIR)/files/openlist2.tls $(1)/usr/share/openlist2/tls.sh
+	$(INSTALL_BIN) $(CURDIR)/files/openlist2.helper $(1)/usr/libexec/openlist2-helper
+	$(INSTALL_BIN) $(CURDIR)/files/openlist2.defaults $(1)/etc/uci-defaults/99-openlist2
+	$(INSTALL_CONF) $(CURDIR)/files/data.db $(1)/etc/openlist2/data.db
 endef
 
 $(eval $(call Download,openlist-frontend))

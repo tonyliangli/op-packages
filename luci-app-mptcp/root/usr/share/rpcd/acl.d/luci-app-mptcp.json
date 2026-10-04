@@ -2,14 +2,15 @@
     "luci-app-mptcp": {
 	"description": "Grant UCI access for luci-app-mptcp",
 	"read": {
-	    "uci": [ "openmptcprouter", "network" ],
+	    "uci": [ "openmptcprouter", "network", "mqvpn" ],
 	    "file": {
 		"/usr/lib/mptcpd": [ "list" ],
 		"/usr/share/bpf/scheduler": [ "list" ],
+		"/proc/sys/net/mptcp/available_path_managers": [ "read" ],
 		"/sbin/sysctl -n net.ipv4.tcp_available_congestion_control": [ "exec" ]
 	    },
 	    "ubus": {
-		"file": [ "list", "exec" ],
+		"file": [ "read", "list", "exec" ],
 		"system": [ "board" ],
 		"network.interface": [ "dump" ],
 		"luci.mptcp": [
@@ -22,7 +23,8 @@
 		    "get_settings",
 		    "set_settings",
 		    "get_interface_settings",
-		    "set_interface_settings"
+		    "set_interface_settings",
+		    "diagnose"
 		]
 	    }
 	},

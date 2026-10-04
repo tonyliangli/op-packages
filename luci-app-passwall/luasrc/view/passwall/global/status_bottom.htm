@@ -2,6 +2,7 @@
 .pure-img {
     max-height: 100%;
     width: auto;
+   display: inline-block;
 }
 .flag .pure-img {
     max-height: none;
@@ -14,7 +15,7 @@
     box-shadow: 0 0 2rem 0 rgba(136, 152, 170, .3);
     color: #525f7f;
     background: #fff;
-    z-index: 5;
+    z-index: 999;
     box-sizing: border-box;
 }
 
@@ -26,7 +27,7 @@
     height: 2.6em;
     display: block;
     float: left;
-    margin-right: 1em;
+    margin: 0 1em;
 }
 
 .status-bar .inner .status-info {
@@ -75,12 +76,12 @@ display:block !important;
 const _ASSETS = '/luci-static/passwall/';
 const CHECK_IP_URL = '<%=url([[admin]], [[services]], [[passwall]], [[ip]])%>';
 
-let wW = window.innerWidth;
+let mainContent = document.getElementById("maincontent");
+let statusBar = document.querySelector(".status-bar");
 
 function resize() {
     wW = window.innerWidth;
-    let lw = document.querySelector(".main-left")?.offsetWidth ?? 5;
-    let statusBar = document.querySelector(".status-bar");
+    let lw = document.querySelector(".main-left, :root[data-layout='sidebar'] .fs-sidebar")?.offsetWidth ?? 5;
     statusBar.style.width = (wW - lw) + 'px';
     let flagElement = statusBar.querySelector(".flag");
     flagElement.style.width = (flagElement.offsetHeight / 3 * 4) + 'px';
@@ -125,4 +126,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 window.addEventListener('resize', resize);
+if (mainContent && window.getComputedStyle(mainContent).getPropertyValue("contain")=== "paint") {
+document.body.appendChild(statusBar);
+}
 </script>

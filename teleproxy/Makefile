@@ -1,8 +1,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=teleproxy
-PKG_VERSION:=4.12.2
-PKG_RELEASE:=7
+PKG_VERSION:=4.16.1
+PKG_RELEASE:=27
 
 PKG_MAINTAINER:=Kosntantine Shevlakov <shevlakov@132lan.ru>
 PKG_LICENSE:=GPLv2
@@ -10,7 +10,7 @@ PKG_LICENSE_FILES:=LICENSE
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/teleproxy/teleproxy.git
-PKG_SOURCE_VERSION:=06ecb7a06d02669677a0f669119b29f7e9d1d743
+PKG_SOURCE_VERSION:=2deeb7a9c870940f5835ab3979cc5c5158172a4c
 
 PKG_SOURCE_SUBDIR:=$(PKG_NAME)
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
@@ -25,7 +25,7 @@ define Package/$(PKG_NAME)
   SECTION:=net
   CATEGORY:=Network
   TITLE:=MTProxy OpenWRT package
-  DEPENDS:=+libopenssl +zlib
+  DEPENDS:=+libopenssl +zlib +libatomic
 endef
 
 define Package/$(PKG_NAME)/conffiles

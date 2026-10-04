@@ -205,12 +205,14 @@ function rules(proxy, bridge, manual_tproxy, extra_inbound, fakedns) {
                 domain: blocked_domain_rules(proxy),
             });
         }
-        splice(result, 0, 0, {
-            type: "field",
-            inboundTag: [...tproxy_tcp_inbound_v4_tags, ...tproxy_udp_inbound_v4_tags, ...tproxy_tcp_inbound_v6_tags, ...tproxy_udp_inbound_v6_tags, ...extra_inbound_global_tcp_tags, ...extra_inbound_global_udp_tags],
-            outboundTag: "direct",
-            domain: fast_domain_rules(proxy)
-        });
+        if (length(fast_domain_rules(proxy)) > 0) {
+            splice(result, 0, 0, {
+                type: "field",
+                inboundTag: [...tproxy_tcp_inbound_v4_tags, ...tproxy_udp_inbound_v4_tags, ...tproxy_tcp_inbound_v6_tags, ...tproxy_udp_inbound_v6_tags, ...extra_inbound_global_tcp_tags, ...extra_inbound_global_udp_tags],
+                outboundTag: "direct",
+                domain: fast_domain_rules(proxy)
+            });
+        }
         if (proxy["direct_bittorrent"] == "1") {
             splice(result, 0, 0, {
                 type: "field",
@@ -261,7 +263,7 @@ function gen_config() {
 
     const general = filter(values(config), k => k[".type"] == "general")[0] || {};
     const custom_configuration_hook = loadstring(general["custom_configuration_hook"] || "return i => i;")();
-    return custom_configuration_hook({
+    let result = {
         inbounds: inbounds(general, config, extra_inbound),
         outbounds: outbounds(general, config, manual_tproxy, bridge, extra_inbound, fakedns),
         dns: dns_conf(general, config, manual_tproxy, fakedns),
@@ -274,15 +276,19 @@ function gen_config() {
             place: "holder"
         } : null,
         observatory: observatory(general, manual_tproxy),
-        reverse: {
-            bridges: bridges(bridge)
-        },
         routing: {
             domainStrategy: general["routing_domain_strategy"] || "AsIs",
             rules: rules(general, bridge, manual_tproxy, extra_inbound, fakedns),
             balancers: balancers(general, extra_inbound, fakedns)
         }
-    });
+    };
+    const bridges_deprecated = bridges(bridge);
+    if (length(bridges_deprecated) > 0) {
+        result["reverse"] = {
+            bridges: bridges_deprecated
+        };
+    };
+    return custom_configuration_hook(result);
 }
 
 printf("%.4J", gen_config());

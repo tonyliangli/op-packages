@@ -1,0 +1,21 @@
+{
+	"luci-app-flowproxy": {
+		"description": "Grant access to flowproxy configuration",
+		"read": {
+			"uci": [ "flowproxy" ],
+			"file": {
+				"/usr/share/flowproxy/*": [ "read" ]
+			},
+			"ubus": {
+				"luci.flowproxy": [ "*" ],
+				"network.interface": [ "dump" ]
+			}
+		},
+		"write": {
+			"uci": [ "flowproxy" ],
+			"ubus": {
+				"luci.flowproxy": [ "*" ]
+			}
+		}
+	}
+}

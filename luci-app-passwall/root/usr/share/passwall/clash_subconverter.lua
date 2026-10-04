@@ -7,16 +7,7 @@ local urlencode = api.UrlEncode
 local base64 = api.base64Encode
 local json = api.jsonc
 
-local isDebug = false
-
-local log = function(...)
-	if isDebug == true then
-		local result = os.date("%Y-%m-%d %H:%M:%S: ") .. table.concat({...}, " ")
-		print(result)
-	else
-		api.log(...)
-	end
-end
+local domain_redir = {}
 
 local function host_format(host)
 	if not host then return "" end
@@ -25,20 +16,6 @@ local function host_format(host)
 		return "[" .. str .. "]"
 	end
 	return host
-end
-
-local function load_yaml(file)
-	local ok, lyaml = pcall(require, "lyaml")
-	if not ok then
-		log("  - 缺少 YAML 解析器（lyaml），Clash 订阅转换失败！")
-		return nil
-	end
-	local f = io.open(file)
-	if f then
-		local data = lyaml.load(f:read("*a"))
-		f:close()
-		return data
-	end
 end
 
 local function build_alpn(alpn)   -- 排序+去重
@@ -91,10 +68,10 @@ local function build_common(node)
 
 	local ech_opts = node["ech-opts"]
 	if ech_opts and ech_opts.enable == true then
-		if ech_opts.config then
-			o.tls.ech = ech_opts.config
-		elseif ech_opts["query-server-name"] then
+		if ech_opts["query-server-name"] then
 			o.tls.ech = ech_opts["query-server-name"] .. "+https://223.5.5.5/dns-query"
+		elseif ech_opts.config then
+			o.tls.ech = ech_opts.config
 		end
 	end
 
@@ -111,7 +88,16 @@ local function build_common(node)
 	if net == "ws" then
 		local opts = node["ws-opts"]
 		if opts then
-			o.transport.path = opts.path
+			local path = opts.path or "/"
+			local ed = opts["max-early-data"]
+			local eh = opts["early-data-header-name"]
+			if ed then
+				path = path .. "?ed=" .. ed
+			end
+			if eh then
+				path = path .. (path:find("?", 1, true) and "&eh=" or "?eh=") .. eh
+			end
+			o.transport.path = path
 			o.transport.host = opts.headers and opts.headers.Host
 		end
 
@@ -124,7 +110,9 @@ local function build_common(node)
 	elseif net == "http" then
 		local opts = node["http-opts"]
 		if opts then
-			o.transport.host = get_first(opts.host)
+			-- Clash http-opts carries the camouflage Host under headers.Host
+			-- (a list), like ws-opts; opts.host is not standard for http.
+			o.transport.host = get_first(opts.host) or (opts.headers and get_first(opts.headers.Host))
 			o.transport.path = get_first(opts.path)
 		end
 
@@ -185,7 +173,7 @@ local function build_common(node)
 				local d = opts["download-settings"]
 				local ds = {}
 
-				if d.server then ds.address = d.server end
+				if d.server then ds.address = domain_redir[d.server] or d.server end
 				if d.port then ds.port = d.port end
 
 				ds.network = "xhttp"
@@ -241,7 +229,7 @@ local function encode_vless(node)
 	local link = "vless://" .. node.uuid .. "@" .. o.server .. ":" .. o.port
 	local p = {}
 
-	if node.flow then table.insert(p, "flow=" .. urlencode(node.flow)) end
+	if type(node.flow) == "string" and node.flow:sub(1, 5) == "xtls-" then table.insert(p, "flow=" .. urlencode(node.flow)) end
 	if node.encryption then table.insert(p, "encryption=" .. urlencode(node.encryption)) end
 
 	-- TLS
@@ -267,7 +255,7 @@ local function encode_vless(node)
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(o.name or "")
+	return 0, link .. "#" .. urlencode(o.name or "")
 end
 
 -- Trojan
@@ -283,6 +271,7 @@ local function encode_trojan(node)
 	if o.tls.sni then table.insert(p, "sni=" .. urlencode(o.tls.sni)) end
 	if o.tls.fp then table.insert(p, "fp=" .. urlencode(o.tls.fp)) end
 	if o.tls.alpn then table.insert(p, "alpn=" .. urlencode(o.tls.alpn)) end
+	if o.tls.ech then table.insert(p, "ech=" .. urlencode(o.tls.ech)) end
 	if o.tls.pcs then table.insert(p, "pcs=" .. urlencode(o.tls.pcs)) end
 	table.insert(p, "allowInsecure=" .. (o.tls.insecure and "1" or "0"))
 
@@ -295,7 +284,7 @@ local function encode_trojan(node)
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(o.name or "")
+	return 0, link .. "#" .. urlencode(o.name or "")
 end
 
 -- VMess
@@ -319,6 +308,7 @@ local function encode_vmess(node)
 		sni = o.tls.sni,
 		alpn = o.tls.alpn,
 		fp = o.tls.fp,
+		ech = o.tls.ech,
 		pcs = o.tls.pcs,
 		insecure = o.tls.insecure and "1" or "0",
 		tfo = node.tfo and "1" or "0"
@@ -328,11 +318,19 @@ local function encode_vmess(node)
 		obj.path = o.transport.serviceName or ""
 	end
 
-	return "vmess://" .. base64(json.stringify(obj))
+	return 0, "vmess://" .. base64(json.stringify(obj))
 end
 
 -- SS
 local function encode_ss(node)
+	local ss_method = {
+		["none"]=1, ["aes-128-gcm"]=1, ["aes-192-gcm"]=1, ["aes-256-gcm"]=1, ["chacha20-ietf-poly1305"]=1, ["xchacha20-ietf-poly1305"]=1, ["2022-blake3-aes-128-gcm"]=1, ["2022-blake3-aes-256-gcm"]=1, ["2022-blake3-chacha20-poly1305"]=1,
+		["aes-128-ctr"]=1, ["aes-192-ctr"]=1, ["aes-256-ctr"]=1, ["aes-128-cfb"]=1, ["aes-192-cfb"]=1, ["aes-256-cfb"]=1, ["rc4-md5"]=1, ["chacha20-ietf"]=1, ["xchacha20"]=1,
+	}
+	if not ss_method[node.cipher or ""] then
+		return 1, "订阅转换 → 丢弃 SS 节点：" .. (node.name or "") .. "，因 Core 不支持 " .. (node.cipher or "") .. " 加密方式"
+	end
+
 	local userinfo = node.cipher .. ":" .. node.password
 	local base = userinfo .. "@" .. host_format(node.server) .. ":" .. node.port
 	local link = "ss://" .. base64(base)
@@ -343,22 +341,45 @@ local function encode_ss(node)
 	if node["udp-over-tcp"] then table.insert(p, "uot=1") end
 
 	if node.plugin then
-		local plugin = node.plugin
-		if node["plugin-opts"] then
+		local plugin = (node.plugin == "obfs") and "obfs-local" or node.plugin
+		if plugin == "shadow-tls" then
+			local shadow_tls = base64(json.stringify(node["plugin-opts"] or {}))
+			table.insert(p, "shadow-tls=" .. urlencode(shadow_tls))
+		elseif plugin == "obfs-local" or plugin == "v2ray-plugin" then
 			local opts = {}
-			for k, v in pairs(node["plugin-opts"]) do
-				table.insert(opts, k .. "=" .. v)
+			for k, v in pairs(node["plugin-opts"] or {}) do
+				if plugin == "obfs-local" then
+					if k == "mode" then k = "obfs" end
+					if k == "host" then k = "obfs-host" end
+				elseif plugin == "v2ray-plugin" then
+					if k == "mode" and v == "websocket" then
+						v = nil
+					elseif type(v) == "boolean" then
+						if v == true then
+							table.insert(opts, k)
+						end
+						v = nil
+					end
+				end
+				if v ~= nil then
+					if type(v) == "boolean" then
+						v = v and "1" or "0"
+					end
+					table.insert(opts, k .. "=" .. v)
+				end
 			end
-			plugin = plugin .. ";" .. table.concat(opts, ";")
+			if #opts > 0 then plugin = plugin .. ";" .. table.concat(opts, ";") end
+			table.insert(p, "plugin=" .. urlencode(plugin))
+		else
+			return 1, "订阅转换 → 丢弃 SS 节点：" .. (node.name or "") .. "，因 Core 不支持 " .. plugin .. " 插件"
 		end
-		table.insert(p, "plugin=" .. urlencode(plugin))
 	end
 
 	if #p > 0 then
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(node.name or "")
+	return 0, link .. "#" .. urlencode(node.name or "")
 end
 
 -- Hysteria
@@ -383,7 +404,7 @@ local function encode_hysteria2(node)
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(node.name or "")
+	return 0, link .. "#" .. urlencode(node.name or "")
 end
 
 -- Hysteria2
@@ -394,6 +415,8 @@ local function encode_hysteria2(node)
 	if node["ports"] then table.insert(p, "mport=" .. urlencode(node["ports"])) end
 	if node.obfs then table.insert(p, "obfs=" .. node.obfs) end
 	if node["obfs-password"] then table.insert(p, "obfs-password=" .. node["obfs-password"]) end
+	if node["obfs-min-packet-size"] then table.insert(p, "minPacketSize=" .. node["obfs-min-packet-size"]) end
+	if node["obfs-max-packet-size"] then table.insert(p, "maxPacketSize=" .. node["obfs-max-packet-size"]) end
 	if node.up then table.insert(p, "upmbps=" .. node.up) end
 	if node.down then table.insert(p, "downmbps=" .. node.down) end
 
@@ -405,7 +428,7 @@ local function encode_hysteria2(node)
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(node.name or "")
+	return 0, link .. "#" .. urlencode(node.name or "")
 end
 
 -- TUIC
@@ -425,32 +448,50 @@ local function encode_tuic(node)
 	if node["disable-sni"] then table.insert(p, "disable_sni=1") end
 	if node["skip-cert-verify"] then table.insert(p, "allowInsecure=1") end
 	if node["udp-relay-mode"] then table.insert(p, "udp_relay_mode=" .. node["udp-relay-mode"]) end
-	
+	if node["fingerprint"] then table.insert(p, "pcs=" .. urlencode(node["fingerprint"])) end
 
 	if #p > 0 then
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(node.name or "")
+	return 0, link .. "#" .. urlencode(node.name or "")
 end
 
 -- AnyTLS
 local function encode_anytls(node)
+	local err_msg
+	if node["shadow-tls-opts"] then
+		err_msg = "ShadowTLS"
+	elseif node["restls-opts"] then
+		err_msg = "ResTLS"
+	elseif node["jls-opts"] then
+		err_msg = "JLS"
+	end
+	if err_msg then
+		err_msg = "订阅转换 → 丢弃 AnyTLS 节点：" .. (node.name or "") .. "，因 Sing-Box 不支持 AnyTLS + " .. err_msg
+		return 1, err_msg
+	end
+
+	local o = build_common(node)
+
 	local link = "anytls://" .. (node.password or "") .. "@" .. host_format(node.server) .. ":" .. node.port
 	local p = {}
 
-	if node.sni then table.insert(p, "sni=" .. urlencode(node.sni)) end
-	if node["skip-cert-verify"] then table.insert(p, "allowInsecure=1") end
-
-	if node.alpn then
-		table.insert(p, "alpn=" .. urlencode(build_alpn(node.alpn)))
-	end
+	if o.tls.security then table.insert(p, "security=" .. o.tls.security) end
+	if o.tls.pbk then table.insert(p, "pbk=" .. urlencode(o.tls.pbk)) end
+	if o.tls.sid then table.insert(p, "sid=" .. urlencode(o.tls.sid)) end
+	if o.tls.sni then table.insert(p, "sni=" .. urlencode(o.tls.sni)) end
+	if o.tls.alpn then table.insert(p, "alpn=" .. urlencode(o.tls.alpn)) end
+	if o.tls.fp then table.insert(p, "fp=" .. urlencode(o.tls.fp)) end
+	if o.tls.ech then table.insert(p, "ech=" .. urlencode(o.tls.ech)) end
+	if o.tls.pcs then table.insert(p, "pcs=" .. urlencode(o.tls.pcs)) end
+	table.insert(p, "insecure=" .. (o.tls.insecure and "1" or "0"))
 
 	if #p > 0 then
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return link .. "#" .. urlencode(node.name or "")
+	return 0, link .. "#" .. urlencode(node.name or "")
 end
 
 -- SSR
@@ -467,13 +508,51 @@ local function encode_ssr(node)
 		link = link .. "?" .. table.concat(p, "&")
 	end
 
-	return "ssr://" .. base64(link)
+	return 0, "ssr://" .. base64(link)
+end
+
+-- snell
+local function encode_snell(node)
+	local err_msg
+	local obfs = node["obfs-opts"]
+	if obfs and obfs.mode ~= "http" and obfs.mode ~= "none" then
+		err_msg = obfs.mode
+	end
+	if err_msg then
+		err_msg = "订阅转换 → 丢弃 Snell 节点：" .. (node.name or "") .. "，因 Sing-Box 不支持 Snell + " .. err_msg
+		return 1, err_msg
+	end
+	local version = node.version and tonumber(node.version) or 4
+	version = (version == 5) and 4 or version
+	if version < 4 then
+		err_msg = "订阅转换 → 丢弃 Snell 节点：" .. (node.name or "") .. "，因 Sing-Box 不支持 Snell 版本小于 4"
+		return 1, err_msg
+	end
+
+	local link = "snell://" .. host_format(node.server) .. ":" .. node.port
+	local p = {}
+
+	if node.psk then table.insert(p, "psk=" .. urlencode(node.psk)) end
+	table.insert(p, "version=" .. version)
+	if obfs.mode == "http" then
+		table.insert(p, "obfs=http")
+		if obfs.host then table.insert(p, "obfs-host=" .. urlencode(obfs.host)) end
+	end
+	table.insert(p, "reuse=" .. (node.reuse and "1" or "0"))
+
+	if #p > 0 then
+		link = link .. "?" .. table.concat(p, "&")
+	end
+
+	return 0, link .. "#" .. urlencode(node.name or "")
 end
 
 local function encode_node(node)
 	if (not node.type) or (not node.name) then return nil end
 
 	local t = node.type
+
+	node.server = domain_redir[node.server] or node.server
 
 	if t == "vless" then return encode_vless(node)
 	elseif t == "trojan" then return encode_trojan(node)
@@ -484,37 +563,83 @@ local function encode_node(node)
 	elseif t == "tuic" then return encode_tuic(node)
 	elseif t == "anytls" then return encode_anytls(node)
 	elseif t == "ssr" then return encode_ssr(node)
-	else log("  - 丢弃不支持的节点：" .. node.name .. "，节点类型：" .. t)
+	elseif t == "snell" then return encode_snell(node)
+	else api.log("订阅转换 → 丢弃不支持的节点：" .. node.name .. "，节点类型：" .. t)
 	end
 end
 
-local function convert(input, output)
-	local data = load_yaml(input)
-	if not data or not data.proxies then
-		log("  - 转换失败，没有 Clash YAML 节点信息，请检查 URL 是否支持 Clash 订阅。")
-		return
+function parseClashNode(raw, remark)
+	if not raw then return "" end 
+	local ok, lyaml = pcall(require, "lyaml")
+	if not ok then return raw end
+
+	local data = lyaml.load(raw)
+	if not data or type(data) ~= "table" then return raw end
+	if not data.proxies then return "" end
+
+	api.log('检测到 Clash 订阅，正在进行转换 ...')
+
+	-- Some airports use hosts domain redirect to disguise the real node domain name.
+	for k, v in pairs(data.hosts or {}) do
+		if type(k) == "string" and type(v) == "string" then
+			if api.datatypes.hostname(k) and api.datatypes.hostname(v) then
+				domain_redir[k] = v
+			end
+		end
 	end
 
-	local f = io.open(output, "w")
-
+	local links = {}
 	for _, node in ipairs(data.proxies) do
-		local link = encode_node(node)
-		if link then f:write(link .. "\n") end
+		local err, link = encode_node(node)
+		if err == 1 and link then
+			api.log(link)
+		elseif link then
+			table.insert(links, link)
+		end
 	end
 
-	f:close()
+	return #links > 0 and table.concat(links, "\n") or ""
 end
 
-local input = arg[1] or "/tmp/clash.yaml"
-local output = arg[2] or "/tmp/sub.txt"
+function parse_clash_sub_info(headers)
+	local userinfo = headers:match("[Ss]ubscription%-userinfo:%s*([^\r\n]+)")
+	if not userinfo then return nil end
 
-local execute = function()
-	convert(input, output)
-end
+	local upload = tonumber(userinfo:match("upload=(%d+)")) or 0
+	local download = tonumber(userinfo:match("download=(%d+)")) or 0
+	local total = tonumber(userinfo:match("total=(%d+)")) or 0
+	local expire = tonumber(userinfo:match("expire=(%d+)"))
+	local remain = total - (upload + download)
+	if remain < 0 then remain = 0 end
 
-xpcall(execute, function(e)
-	log(e)
-	if type(debug) == "table" and type(debug.traceback) == "function" then
-		log(debug.traceback())
+	local function format_size(bytes)
+		local units = { "B", "KB", "MB", "GB", "TB", "PB" }
+		local i = 1
+		while bytes >= 1024 and i < #units do
+			bytes = bytes / 1024
+			i = i + 1
+		end
+		if bytes >= 100 then
+			return string.format("%.0f%s", bytes, units[i])
+		elseif bytes >= 10 then
+			return string.format("%.1f%s", bytes, units[i])
+		else
+			return string.format("%.2f%s", bytes, units[i])
+		end
 	end
-end)
+
+	local rem_traffic = format_size(remain)
+
+	local expired_date
+	if expire and expire > 0 then
+		local t = os.date("*t", expire)
+		expired_date = string.format("%d-%d-%d", t.year, t.month, t.day)
+	else
+		expired_date = "长期有效"
+	end
+
+	return {
+		rem_traffic = rem_traffic,
+		expired_date = expired_date
+	}
+end

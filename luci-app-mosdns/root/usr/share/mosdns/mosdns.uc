@@ -72,7 +72,7 @@ function get_adlist() {
 	let adblock = uci_cursor.get('mosdns', 'config', 'adblock');
 
 	if (adblock !== '1') {
-		mkdir('/etc/mosdns/rule', 0755);
+		mkdir('/var/mosdns', 0755);
 		exec_sys('rm -rf /etc/mosdns/rule/adlist /etc/mosdns/rule/.ad_source');
 		writefile('/var/mosdns/disable-ads.txt', '');
 		print("/var/mosdns/disable-ads.txt\n");
@@ -149,16 +149,15 @@ function update_adlist() {
 
 			print(`Downloading ${mirror}${url}\n`);
 			stdout.flush();
-			let curl_res = exec_sys(`curl --connect-timeout 5 -m 90 --ipv4 -kfSLo "${ad_tmpdir}/${filename}" "${mirror}${url}"`);
-			if (curl_res.code !== 0) download_failed = true;
+			let dl_res = exec_sys(`wget -4 -q --no-check-certificate -T 90 -O "${ad_tmpdir}/${filename}" "${mirror}${url}"`);
+			if (dl_res.code !== 0) download_failed = true;
 		}
 	}
 
 	if (download_failed) {
-		print("\x1b[1;31mRules download failed.\n");
 		exec_sys(`rm -rf "${ad_tmpdir}"`);
 		unlink(lock_file);
-		exit(1);
+		die("Rules download failed.");
 	} else {
 		if (has_update) {
 			mkdir('/etc/mosdns/rule/adlist', 0755);
@@ -183,7 +182,7 @@ function update_geodat() {
 	let v2dat_dir = '/usr/share/v2ray';
 
 	let tmp_res = exec_sys('mktemp -d');
-	if (tmp_res.code !== 0) exit(1);
+	if (tmp_res.code !== 0) die("Failed to create temp directory for geodata.");
 	let tmpdir = tmp_res.stdout;
 
 	exec_sys(`mkdir -p "${v2dat_dir}"`);
@@ -193,8 +192,9 @@ function update_geodat() {
 
 	print(`Downloading ${geoip_url}.sha256sum\n`);
 	stdout.flush();
-	if (exec_sys(`curl --connect-timeout 5 -m 20 --ipv4 -kfSLo "${tmpdir}/geoip.dat.sha256sum" "${geoip_url}.sha256sum"`).code !== 0) {
-		exec_sys(`rm -rf "${tmpdir}"`); exit(1);
+	if (exec_sys(`wget -4 -q --no-check-certificate -T 20 -O "${tmpdir}/geoip.dat.sha256sum" "${geoip_url}.sha256sum"`).code !== 0) {
+		exec_sys(`rm -rf "${tmpdir}"`);
+		die("Failed to download geoip.dat.sha256sum");
 	}
 
 	let geoip_sum_remote = split(exec_sys(`cat "${tmpdir}/geoip.dat.sha256sum"`).stdout, /[ \t\n]+/)[0];
@@ -209,14 +209,15 @@ function update_geodat() {
 	} else {
 		print(`Downloading ${geoip_url}\n`);
 		stdout.flush();
-		if (exec_sys(`curl --connect-timeout 5 -m 120 --ipv4 -kfSLo "${tmpdir}/geoip.dat" "${geoip_url}"`).code !== 0) {
-			exec_sys(`rm -rf "${tmpdir}"`); exit(1);
+		if (exec_sys(`wget -4 -q --no-check-certificate -T 120 -O "${tmpdir}/geoip.dat" "${geoip_url}"`).code !== 0) {
+			exec_sys(`rm -rf "${tmpdir}"`);
+			die("Failed to download geoip.dat");
 		}
 
 		let sum_downloaded = split(exec_sys(`sha256sum "${tmpdir}/geoip.dat"`).stdout, /[ \t\n]+/)[0];
 		if (sum_downloaded !== geoip_sum_remote) {
-			print("\x1b[1;31mgeoip.dat checksum error\n");
-			exec_sys(`rm -rf "${tmpdir}"`); exit(1);
+			exec_sys(`rm -rf "${tmpdir}"`);
+			die("geoip.dat checksum error");
 		}
 		geoip_updated = true;
 	}
@@ -226,8 +227,9 @@ function update_geodat() {
 
 	print(`Downloading ${geosite_url}.sha256sum\n`);
 	stdout.flush();
-	if (exec_sys(`curl --connect-timeout 5 -m 20 --ipv4 -kfSLo "${tmpdir}/geosite.dat.sha256sum" "${geosite_url}.sha256sum"`).code !== 0) {
-		exec_sys(`rm -rf "${tmpdir}"`); exit(1);
+	if (exec_sys(`wget -4 -q --no-check-certificate -T 20 -O "${tmpdir}/geosite.dat.sha256sum" "${geosite_url}.sha256sum"`).code !== 0) {
+		exec_sys(`rm -rf "${tmpdir}"`);
+		die("Failed to download geosite.dat.sha256sum");
 	}
 
 	let geosite_sum_remote = split(exec_sys(`cat "${tmpdir}/geosite.dat.sha256sum"`).stdout, /[ \t\n]+/)[0];
@@ -242,14 +244,15 @@ function update_geodat() {
 	} else {
 		print(`Downloading ${geosite_url}\n`);
 		stdout.flush();
-		if (exec_sys(`curl --connect-timeout 5 -m 120 --ipv4 -kfSLo "${tmpdir}/geosite.dat" "${geosite_url}"`).code !== 0) {
-			exec_sys(`rm -rf "${tmpdir}"`); exit(1);
+		if (exec_sys(`wget -4 -q --no-check-certificate -T 120 -O "${tmpdir}/geosite.dat" "${geosite_url}"`).code !== 0) {
+			exec_sys(`rm -rf "${tmpdir}"`);
+			die("Failed to download geosite.dat");
 		}
 
 		let sum_downloaded = split(exec_sys(`sha256sum "${tmpdir}/geosite.dat"`).stdout, /[ \t\n]+/)[0];
 		if (sum_downloaded !== geosite_sum_remote) {
-			print("\x1b[1;31mgeosite.dat checksum error\n");
-			exec_sys(`rm -rf "${tmpdir}"`); exit(1);
+			exec_sys(`rm -rf "${tmpdir}"`);
+			die("geosite.dat checksum error");
 		}
 		geosite_updated = true;
 	}
@@ -278,34 +281,34 @@ function v2dat_dump() {
 	exec_sys('rm -f /var/mosdns/geo*.txt');
 
 	if (configfile === "/var/etc/mosdns.json") {
-		exec_sys(`v2dat unpack geoip -o /var/mosdns -f cn ${v2dat_dir}/geoip.dat`);
-		exec_sys(`v2dat unpack geosite -o /var/mosdns -f cn -f apple -f 'geolocation-!cn' ${v2dat_dir}/geosite.dat`);
+		exec_sys(`geo2txt geoip -f ${v2dat_dir}/geoip.dat -e cn -o /var/mosdns`);
+		exec_sys(`geo2txt geosite -f ${v2dat_dir}/geosite.dat -e cn -e apple -e 'geolocation-!cn' -o /var/mosdns`);
 
 		if (adblock === '1' && index(ad_source, 'geosite.dat') !== -1) {
-			exec_sys(`v2dat unpack geosite -o /var/mosdns -f category-ads-all ${v2dat_dir}/geosite.dat`);
+			exec_sys(`geo2txt geosite -f ${v2dat_dir}/geosite.dat -e category-ads-all -o /var/mosdns`);
 		}
 
 		if (streaming_media === '1') {
-			exec_sys(`v2dat unpack geosite -o /var/mosdns -f netflix -f disney -f hulu ${v2dat_dir}/geosite.dat`);
+			exec_sys(`geo2txt geosite -f ${v2dat_dir}/geosite.dat -e netflix -e disney -e hulu -o /var/mosdns`);
 		} else {
 			writefile('/var/mosdns/geosite_disney.txt', '');
 			writefile('/var/mosdns/geosite_netflix.txt', '');
 			writefile('/var/mosdns/geosite_hulu.txt', '');
 		}
 	} else {
-		exec_sys(`v2dat unpack geoip -o /var/mosdns -f cn ${v2dat_dir}/geoip.dat`);
-		exec_sys(`v2dat unpack geosite -o /var/mosdns -f cn -f 'geolocation-!cn' ${v2dat_dir}/geosite.dat`);
+		exec_sys(`geo2txt geoip -f ${v2dat_dir}/geoip.dat -e cn -o /var/mosdns`);
+		exec_sys(`geo2txt geosite -f ${v2dat_dir}/geosite.dat -e cn -e 'geolocation-!cn' -o /var/mosdns`);
 
 		let geoip_tags = to_array(uci_cursor.get('mosdns', 'config', 'geoip_tags'));
 		if (length(geoip_tags) > 0) {
-			let tags_str = "-f '" + join("' -f '", geoip_tags) + "'";
-			exec_sys(`v2dat unpack geoip -o /var/mosdns ${tags_str} ${v2dat_dir}/geoip.dat`);
+			let tags_str = "-e '" + join("' -e '", geoip_tags) + "'";
+			exec_sys(`geo2txt geoip -f ${v2dat_dir}/geoip.dat ${tags_str} -o /var/mosdns`);
 		}
 
 		let geosite_tags = to_array(uci_cursor.get('mosdns', 'config', 'geosite_tags'));
 		if (length(geosite_tags) > 0) {
-			let tags_str = "-f '" + join("' -f '", geosite_tags) + "'";
-			exec_sys(`v2dat unpack geosite -o /var/mosdns ${tags_str} ${v2dat_dir}/geosite.dat`);
+			let tags_str = "-e '" + join("' -e '", geosite_tags) + "'";
+			exec_sys(`geo2txt geosite -f ${v2dat_dir}/geosite.dat ${tags_str} -o /var/mosdns`);
 		}
 	}
 }
@@ -333,8 +336,10 @@ switch (action) {
 			stdout.flush();
 		} catch (e) {
 			print("Update failed: " + e + "\n");
-			print("UPDATE_FINISHED\n");
+			print("UPDATE_EXITED\n");
 			stdout.flush();
+			unlink('/var/lock/mosdns_update.lock');
+			exit(1);
 		}
 		unlink('/var/lock/mosdns_update.lock');
 		break;

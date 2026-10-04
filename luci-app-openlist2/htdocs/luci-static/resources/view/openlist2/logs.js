@@ -1,72 +1,72 @@
 'use strict';
-'require dom';
 'require fs';
 'require poll';
-'require uci';
+'require ui';
 'require view';
 
-var scrollPosition = 0;
-var userScrolled = false;
-var logTextarea;
-var log_path;
+const HELPER = '/usr/libexec/openlist2-helper';
+let logTextarea, errorMessage;
 
-uci.load('openlist2').then(function() {
-	log_path = uci.get('openlist2', '@openlist2[0]', 'log_path') || '/var/log/openlist2.log';
-});
+const formatLog = text => (text || '').replace(/\u001b\[[0-9;]*m/g, '').trim() || _('No log data.');
 
-function pollLog() {
-	return Promise.all([
-		fs.read_direct(log_path, 'text').then(function (res) {
-			return res.trim().split(/\n/).join('\n').replace(/\u001b\[33mWARN\u001b\[0m/g, '').replace(/\u001b\[36mINFO\u001b\[0m/g, '').replace(/\u001b\[31mERRO\u001b\[0m/g, '');
-		}),
-	]).then(function (data) {
-		logTextarea.value = data[0] || _('No log data.');
+const pollLog = () => {
+	if (!logTextarea)
+		return Promise.resolve();
 
-		if (!userScrolled) {
-			logTextarea.scrollTop = logTextarea.scrollHeight;
-		} else {
-			logTextarea.scrollTop = scrollPosition;
-		}
+	return fs.exec(HELPER, ['log-read']).then(result => {
+		if (result.code !== 0)
+			throw new Error((result.stderr || _('Unable to read the log.')).trim());
+
+		// Decide before replacing text, so programmatic scrolling is not
+		// mistaken for the user scrolling away from the bottom.
+		const atBottom = logTextarea.scrollTop + logTextarea.clientHeight >= logTextarea.scrollHeight - 10;
+		const position = logTextarea.scrollTop;
+		logTextarea.value = formatLog(result.stdout);
+		logTextarea.scrollTop = atBottom ? logTextarea.scrollHeight : position;
+		errorMessage.textContent = '';
+		errorMessage.hidden = true;
+	}).catch(error => {
+		errorMessage.textContent = _('Unable to read the log: %s').format(error.message);
+		errorMessage.hidden = false;
 	});
 };
 
 return view.extend({
-	handleCleanLogs: function () {
-		return fs.write(log_path, '')
-			.catch(function (e) { ui.addNotification(null, E('p', e.message)) });
+	handleCleanLogs() {
+		if (!L.hasViewPermission())
+			return Promise.resolve();
+		return fs.exec(HELPER, ['log-clear']).then(result => {
+			if (result.code !== 0)
+				throw new Error((result.stderr || _('Unable to clear the log.')).trim());
+			return pollLog();
+		}).catch(error => ui.addNotification(null, E('p', error.message)));
 	},
 
-	render: function () {
+	render() {
 		logTextarea = E('textarea', {
+			'id': 'log_content',
 			'class': 'cbi-input-textarea',
 			'wrap': 'off',
 			'readonly': 'readonly',
-			'style': 'width: calc(100% - 20px);height: 535px;margin: 10px;overflow-y: scroll;',
-		});
+			'style': 'width:100%;height:535px;overflow:auto;'
+		}, _('Collecting data...'));
+		errorMessage = E('p', { 'class': 'alert-message warning', 'role': 'status', 'hidden': true });
+		const clearButton = E('button', {
+			'class': 'btn cbi-button-action',
+			'type': 'button',
+			'disabled': !L.hasViewPermission() || null,
+			'click': ui.createHandlerFn(this, 'handleCleanLogs')
+		}, _('Clear current log'));
 
-		logTextarea.addEventListener('scroll', function () {
-			userScrolled = true;
-			scrollPosition = logTextarea.scrollTop;
-		});
-
-		var log_textarea_wrapper = E('div', { 'id': 'log_textarea' }, logTextarea);
-
-		setTimeout(function () {
-			poll.add(pollLog);
-		}, 100);
-
-		var clear_logs_button = E('input', { 'class': 'btn cbi-button-action', 'type': 'button', 'style': 'margin-left: 10px; margin-top: 10px;', 'value': _('Clear logs') });
-		clear_logs_button.addEventListener('click', this.handleCleanLogs.bind(this));
-
-		return E([
-			E('div', { 'class': 'cbi-map' }, [
-				E('div', { 'class': 'cbi-section' }, [
-					clear_logs_button,
-					log_textarea_wrapper,
-					E('div', { 'style': 'text-align:right' },
-						E('small', {}, _('Refresh every %s seconds.').format(L.env.pollinterval))
-					)
-				])
+		poll.add(pollLog);
+		return E('div', { 'class': 'cbi-map' }, [
+			E('div', { 'class': 'cbi-section' }, [
+				E('p', {}, _('Showing up to the last 200 lines and 16 KiB. Older entries remain in the log files.')),
+				clearButton,
+				errorMessage,
+				logTextarea,
+				E('p', { 'style': 'text-align:right' },
+					_('Refresh every %s seconds.').format(L.env.pollinterval))
 			])
 		]);
 	},

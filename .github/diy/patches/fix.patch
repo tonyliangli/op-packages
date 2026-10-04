@@ -1,13 +1,3 @@
---- a/oscam/files/oscam.init
-+++ b/oscam/files/oscam.init
-@@ -8,5 +8,5 @@ start() {
- }
- 
- stop() {
--	killall oscam
-+	kill `pidof oscam | sed "s/$$//g"`
- }
-
 --- a/totd/root/etc/init.d/totd
 +++ b/totd/root/etc/init.d/totd
 @@ -55,5 +55,5 @@ start_service(){
@@ -101,14 +91,3 @@
 -  killall rtorrent
 +  kill `pidof rtorrent | sed "s/$$//g"`
  }
-
---- a/quectel_MHI/Makefile
-+++ b/quectel_MHI/Makefile
-@@ -17,6 +17,7 @@ include $(INCLUDE_DIR)/package.mk
- define KernelPackage/pcie_mhi
-   SUBMENU:=WWAN Support
-   TITLE:=Kernel pcie driver for MHI device
-+  DEPENDS:=@PCIE_SUPPORT
-   FILES:=$(PKG_BUILD_DIR)/pcie_mhi.ko
-   AUTOLOAD:=$(call AutoLoad,90,pcie_mhi)
- endef

@@ -19,10 +19,7 @@ return baseclass.extend({
 		this.dynamicMenuTargets = {};
 
 		this.syncConditionalMenuCache()
-			.then(L.bind(function(reloading) {
-				if (reloading)
-					return;
-
+			.then(L.bind(function() {
 				return this.resolveDynamicMenuTargets()
 					.then(L.bind(function() {
 						return ui.menu.load().then(L.bind(this.render, this));
@@ -70,19 +67,31 @@ return baseclass.extend({
 		return L.url(url, child.name);
 	},
 
-	reloadPageWithMenuFlush: function() {
-		var url = new URL(window.location.href);
-
-		url.searchParams.set('menu', 'flush');
-		window.location.replace(url.toString());
+	getFileListStamp: function(path, suffix) {
+		return L.resolveDefault(fs.list(path), []).then(function(entries) {
+			return entries.filter(function(entry) {
+				return entry && entry.type === 'file' &&
+					(suffix == null || entry.name.endsWith(suffix));
+			}).map(function(entry) {
+				return [ entry.name, entry.mtime || 0, entry.size || 0 ].join(':');
+			}).sort().join('|');
+		});
 	},
 
 	getConditionalMenuStamp: function() {
-		var googleFuMode = !!document.querySelector('.navbar a[href*="/admin/services/openclash"]');
-
-		return Promise.resolve(JSON.stringify({
-			google_fu_mode: googleFuMode
-		}));
+		return Promise.all([
+			this.getFileListStamp('/usr/share/luci/menu.d', '.json'),
+			this.getFileListStamp('/usr/share/rpcd/acl.d', '.json'),
+			L.resolveDefault(fs.stat('/etc/config/wireless'), null),
+			L.resolveDefault(fs.stat('/etc/config/google_fu_mode'), null)
+		]).then(function(stamps) {
+			return JSON.stringify({
+				menu_definitions: stamps[0],
+				acl_definitions: stamps[1],
+				wireless_config: stamps[2] ? [ stamps[2].mtime || 0, stamps[2].size || 0 ].join(':') : 'absent',
+				google_fu_mode: stamps[3] ? [ stamps[3].mtime || 0, stamps[3].size || 0 ].join(':') : 'absent'
+			});
+		});
 	},
 
 	flushBackendMenuCache: function() {
@@ -107,12 +116,11 @@ return baseclass.extend({
 			if (previousStamp === stamp)
 				return false;
 
-			window.localStorage.setItem(storageKey, stamp);
-
-			return this.flushBackendMenuCache().then(L.bind(function() {
-				this.reloadPageWithMenuFlush();
-				return true;
-			}, this));
+			return this.flushBackendMenuCache().then(function() {
+				// Reload only the menu: navigating here can abort form saves.
+				ui.menu.menu = null;
+				window.localStorage.setItem(storageKey, stamp);
+			});
 		}, this));
 	},
 

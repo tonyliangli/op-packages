@@ -1,35 +1,60 @@
 --- a/luci-app-ssr-plus/Makefile
 +++ b/luci-app-ssr-plus/Makefile
-@@ -118,7 +118,7 @@ endchoice
+@@ -33,6 +33,13 @@ LUCI_DEPENDS:= \
+ 	+libuci-lua +lua +luci-compat +dns2tcp +dnsmasq-full \
+ 	+jq +ip-full +lua-neturl +libuci-lua +microsocks +ipt2socks +lyaml \
+ 	+resolveip +curl +nping \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_Xray:xray-core \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_Xray:coreutils-timeout \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_Http_Proxy:3proxy \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo:mihomo \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo:v2ray-geoip \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_GeoData:v2ray-geoip \
++	+PACKAGE_$(PKG_NAME)_INCLUDE_GeoData:v2ray-geosite \
+ 	+PACKAGE_$(PKG_NAME)_INCLUDE_ChinaDNS_NG:chinadns-ng \
+ 	+PACKAGE_$(PKG_NAME)_INCLUDE_MosDNS:mosdns \
+ 	+PACKAGE_$(PKG_NAME)_INCLUDE_Shadow_TLS:shadow-tls \
+@@ -106,8 +112,6 @@ choice
  
- choice
- 	prompt "V2ray-core Selection"
--	default PACKAGE_$(PKG_NAME)_INCLUDE_Xray if aarch64||arm||i386||x86_64
-+	default PACKAGE_$(PKG_NAME)_INCLUDE_Xray
- 	default PACKAGE_$(PKG_NAME)_INCLUDE_NONE_V2RAY
+ 	config PACKAGE_$(PKG_NAME)_INCLUDE_Xray
+ 	bool "Xray-core"
+-	select PACKAGE_xray-core
+-	select PACKAGE_coreutils-timeout
+ endchoice
  
- 	config PACKAGE_$(PKG_NAME)_INCLUDE_NONE_V2RAY
-@@ -169,7 +169,7 @@ config PACKAGE_$(PKG_NAME)_INCLUDE_DNSPROXY
+ config PACKAGE_$(PKG_NAME)_INCLUDE_ChinaDNS_NG
+@@ -120,20 +124,15 @@ config PACKAGE_$(PKG_NAME)_INCLUDE_MosDNS
  
- config PACKAGE_$(PKG_NAME)_INCLUDE_MosDNS
- 	bool "Include MosDNS"
--	default y if aarch64||arm||i386||x86_64
-+	default y if aarch64||i386||x86_64
+ config PACKAGE_$(PKG_NAME)_INCLUDE_Http_Proxy
+ 	bool "Include HTTP(S) Proxy Server"
+-	select PACKAGE_3proxy
+-	default y if (aarch64||arm||i386||loongarch64||riscv64||x86_64)
++	default y if (aarch64||i386||loongarch64||riscv64||x86_64)
  
- config PACKAGE_$(PKG_NAME)_INCLUDE_Hysteria
- 	bool "Include Hysteria"
+ config PACKAGE_$(PKG_NAME)_INCLUDE_Mihomo
+ 	bool "Include Mihomo (Clash Support)"
+-	select PACKAGE_mihomo
+-	select PACKAGE_v2ray-geoip
+ 	depends on aarch64||arm||i386||loongarch64||riscv64||x86_64
+ 	default y if aarch64||arm||i386||loongarch64||riscv64||x86_64
+ 
+ config PACKAGE_$(PKG_NAME)_INCLUDE_GeoData
+ 	bool "Include GeoData (GeoIP and GeoSite)"
+-	select PACKAGE_v2ray-geoip
+-	select PACKAGE_v2ray-geosite
+ 	default y if i386||x86_64
+ 
+ config PACKAGE_$(PKG_NAME)_INCLUDE_Shadow_TLS
 
 --- a/luci-app-ssr-plus/luasrc/controller/shadowsocksr.lua
 +++ b/luci-app-ssr-plus/luasrc/controller/shadowsocksr.lua
-@@ -76,10 +76,66 @@ function index()
- 	entry({"admin", "services", "shadowsocksr", "remove_node"}, call("act_remove"))
- 	entry({"admin", "services", "shadowsocksr", "save_node_order"}, call("act_save_order")).leaf = true
- 	entry({"admin", "services", "shadowsocksr", "get_now_use_node"}, call("act_get_now_use_node")).leaf = true
-+	entry({'admin', 'services', "shadowsocksr", 'ip'}, call('check_ip')) -- 获取ip情况
+@@ -663,6 +663,62 @@ function index()
+ 	entry({"admin", "services", "shadowsocksr", "clash_client_rule_clear"}, call("clash_client_rule_clear")).leaf = true
  	--[[Backup]]
  	entry({"admin", "services", "shadowsocksr", "backup"}, call("create_backup")).leaf = true
- end
- 
++	entry({'admin', 'services', "shadowsocksr", 'ip'}, call('check_ip')) -- 获取ip情况
++end
++
 +function check_site(host, port)
 +    local nixio = require "nixio"
 +    local socket = nixio.socket("inet", "stream")
@@ -83,30 +108,33 @@
 +    e.youtube = check_site('www.youtube.com', port)
 +    luci.http.prepare_content('application/json')
 +    luci.http.write_json(e)
-+end
-+
+ end
+ 
  function subscribe()
- 	luci.sys.call("/usr/bin/lua /usr/share/shadowsocksr/subscribe.lua >>/var/log/ssrplus.log")
- 	luci.http.prepare_content("application/json")
 
 --- a/luci-app-ssr-plus/luasrc/model/cbi/shadowsocksr/client.lua
 +++ b/luci-app-ssr-plus/luasrc/model/cbi/shadowsocksr/client.lua
-@@ -293,4 +293,5 @@ if is_finded("chinadns-ng") then
+@@ -227,7 +227,7 @@ if is_finded("chinadns-ng") then
  	end
  end
  
-+m:section(SimpleSection).template = "shadowsocksr/status_bottom"
+-local dns_defaults_section = m:section(SimpleSection)
+-dns_defaults_section.template = "shadowsocksr/client_dns_defaults"
++m:append(Template("shadowsocksr/client_dns_defaults"))
++m:append(Template("shadowsocksr/status_bottom"))
+ 
  return m
 
 new file mode 100644
 index 000000000000..a00fff9c79b3
 --- /dev/null
 +++ b/luci-app-ssr-plus/luasrc/view/shadowsocksr/status_bottom.htm
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,135 @@
 +<style>
 +.pure-img {
 +    max-height: 100%;
 +    width: auto;
++   display: inline-block;
 +}
 +.flag .pure-img {
 +    max-height: none;
@@ -119,7 +147,7 @@ index 000000000000..a00fff9c79b3
 +    box-shadow: 0 0 2rem 0 rgba(136, 152, 170, .3);
 +    color: #525f7f;
 +    background: #fff;
-+    z-index: 5;
++    z-index: 999;
 +    box-sizing: border-box;
 +}
 +
@@ -131,7 +159,7 @@ index 000000000000..a00fff9c79b3
 +    height: 2.6em;
 +    display: block;
 +    float: left;
-+    margin-right: 1em;
++    margin: 0 1em;
 +}
 +
 +.status-bar .inner .status-info {
@@ -143,14 +171,17 @@ index 000000000000..a00fff9c79b3
 +    text-align: right;
 +}
 +
-+#cbi-passwall+.cbi-page-actions.control-group.fixed {
-+    bottom: 3.3rem;
++.pure-u-1-2 {
++    width: 49%;
++    display: inline-block;
 +}
 +
-+footer{
-+display:block !important;
-+}
-+    
++@media screen and (max-width: 720px) {
++		.pure-u-1-2 {
++			width: 100%;
++		}
++	}
++
 +@media screen and (max-width: 700px) {
 +.status-bar .icon-con {
 +    height: 2.5em;
@@ -161,15 +192,15 @@ index 000000000000..a00fff9c79b3
 +    <div class="inner">
 +        <div class="pure-g">
 +            <div class="pure-u-1-2">
-+                <span class="flag"><img src="/luci-static/passwall/flags/loading.svg" class="pure-img"></span> <span
++                <span class="flag"><img src="/luci-static/shadowsocksr/flags/loading.svg" class="pure-img"></span> <span
 +                    class="status-info">获取中...</span>
 +            </div>
 +            <div class="pure-u-1-2">
 +                <div class="icon-con">
-+                    <img src="/luci-static/passwall/img/site_icon1_01.png" class="pure-img i1">
-+                    <img src="/luci-static/passwall/img/site_icon1_02.png" class="pure-img i2">
-+                    <img src="/luci-static/passwall/img/site_icon1_03.png" class="pure-img i3">
-+                    <img src="/luci-static/passwall/img/site_icon1_04.png" class="pure-img i4">
++                    <img src="/luci-static/shadowsocksr/img/site_icon1_01.png" class="pure-img i1">
++                    <img src="/luci-static/shadowsocksr/img/site_icon1_02.png" class="pure-img i2">
++                    <img src="/luci-static/shadowsocksr/img/site_icon1_03.png" class="pure-img i3">
++                    <img src="/luci-static/shadowsocksr/img/site_icon1_04.png" class="pure-img i4">
 +                </div>
 +            </div>
 +        </div>
@@ -177,15 +208,15 @@ index 000000000000..a00fff9c79b3
 +</div>
 +
 +<script>
-+const _ASSETS = '/luci-static/passwall/';
-+const CHECK_IP_URL = '<%=url([[admin]], [[services]], [[passwall]], [[ip]])%>';
++const _ASSETS = '/luci-static/shadowsocksr/';
++const CHECK_IP_URL = '<%=url([[admin]], [[services]], [[shadowsocksr]], [[ip]])%>';
 +
-+let wW = window.innerWidth;
++let mainContent = document.getElementById("maincontent");
++let statusBar = document.querySelector(".status-bar");
 +
 +function resize() {
 +    wW = window.innerWidth;
-+    let lw = document.querySelector(".main-left")?.offsetWidth ?? 5;
-+    let statusBar = document.querySelector(".status-bar");
++    let lw = document.querySelector(".main-left, :root[data-layout='sidebar'] .fs-sidebar")?.offsetWidth ?? 5;
 +    statusBar.style.width = (wW - lw) + 'px';
 +    let flagElement = statusBar.querySelector(".flag");
 +    flagElement.style.width = (flagElement.offsetHeight / 3 * 4) + 'px';
@@ -230,6 +261,9 @@ index 000000000000..a00fff9c79b3
 +});
 +
 +window.addEventListener('resize', resize);
++if (mainContent && window.getComputedStyle(mainContent).getPropertyValue("contain")=== "paint") {
++document.body.appendChild(statusBar);
++}
 +</script>
 
 --- a/luci-app-ssr-plus/root/etc/uci-defaults/luci-ssr-plus
@@ -243,3 +277,18 @@ index 000000000000..a00fff9c79b3
 +
  rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
  rm -rf /tmp/luci-modulecache/
+
+--- a/luci-app-ssr-plus/luasrc/model/cbi/shadowsocksr/client-config.lua
++++ b/luci-app-ssr-plus/luasrc/model/cbi/shadowsocksr/client-config.lua
+@@ -1456,11 +1456,9 @@ o:depends("type", "tuic")
+ o.description = translate("If true, allowss insecure connection at TLS client, e.g., TLS server uses unverifiable certificates.")
+ -- Xray 支持时间判断
+ -- if os.time() < os.time({year=2026,month=6,day=1}) then
+-if os.date("%Y.%m.%d") < "2026.06.01" then
+ 	-- Xray 支持到 26.06.01
+ 	o:depends("tls", true)
+ 	o:depends({ type = "v2ray", v2ray_protocol = "vless", reality = true })
+-end
+ 
+ if xray_version_val >= 260131 then
+ 	-- Xray 版本大于等于 26.1.31

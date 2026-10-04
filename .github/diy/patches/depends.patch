@@ -1,3 +1,14 @@
+--- a/pgyvpn/Makefile
++++ b/pgyvpn/Makefile
+@@ -67,7 +67,6 @@ ifeq ($(ARCH),x86_64)
+ 	OPENSSL_COMPAT_TARGET:=linux-x86_64
+ endif
+ 
+-PKG_FLAGS:=nonshared
+ PKG_MAINTAINER:=Oray <developer@oray.com>
+ 
+ include $(INCLUDE_DIR)/package.mk
+
 --- a/luci-app-easytier/Makefile
 +++ b/luci-app-easytier/Makefile
 @@ -10,7 +10,7 @@ PKG_VERSION:=2.3.0
@@ -46,34 +57,25 @@
  
  include $(INCLUDE_DIR)/package.mk
 
---- a/pgyvpn/Makefile
-+++ b/pgyvpn/Makefile
-@@ -36,7 +36,6 @@ PKG_SOURCE:=pgyvpnsvr
- PKG_SOURCE_URL:=https://mirrors.oray.com/orayos/packages/$(PKG_NAME)/$(PKG_ARCH_PGYYPN)/$(PKG_VERSION)/bin
- PKG_HASH:=skip
- 
--PKG_FLAGS:=nonshared
- PKG_MAINTAINER:=Oray <developer@oray.com>
- 
- include $(INCLUDE_DIR)/package.mk
-
---- a/luci-app-adguardhome/root/etc/init.d/adguardhome
-+++ b/luci-app-adguardhome/root/etc/init.d/adguardhome
-@@ -28,6 +28,7 @@
-     uci set "dhcp.@dnsmasq[0].port=$adguard_port"
+--- a/luci-app-adguardhome/root/usr/share/AdGuardHome/control.sh
++++ b/luci-app-adguardhome/root/usr/share/AdGuardHome/control.sh
+@@ -125,6 +125,7 @@ use_port53() {
+     uci set dhcp.@dnsmasq[0].port="$adguardhome_PORT"
      uci commit dhcp
      /etc/init.d/dnsmasq restart
 +    sleep 3
+     agh_reload
  }
  
- # Restore original port configuration
-@@ -253,6 +253,6 @@
-     if [ -n "$ADGUARDHOME_BOOT" ]; then
-         # Wait for interfaces to be up before starting AdGuard Home
-         # Prevents issues like https://github.com/openwrt/packages/issues/21868
--        procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
-+        procd_add_raw_trigger 'interface.*.up' 10000 /etc/init.d/adguardhome restart
-     fi
+--- a/luci-app-adguardhome/root/etc/init.d/adguardhome
++++ b/luci-app-adguardhome/root/etc/init.d/adguardhome
+@@ -263,6 +263,6 @@ service_triggers() {
+ 	if [ -n "$ADGUARDHOME_BOOT" ]; then
+ 		# Wait for interfaces to be up before starting AdGuard Home for real.
+ 		# Prevents issues like https://github.com/openwrt/packages/issues/21868.
+-		procd_add_raw_trigger 'interface.*.up' 5000 /etc/init.d/adguardhome restart
++		procd_add_raw_trigger 'interface.*.up' 10000 /etc/init.d/adguardhome restart
+ 	fi
  }
 
 --- a/luci-app-rclone/Makefile
@@ -99,6 +101,17 @@
    TITLE:=LCD screen controller on PHICOMM K3
    URL:=https://github.com/updateing/k3-screen-ctrl
  endef
+
+--- a/quectel_MHI/Makefile
++++ b/quectel_MHI/Makefile
+@@ -19,6 +19,7 @@ define KernelPackage/pcie_mhi
+   TITLE:=Kernel pcie driver for MHI device
+   FILES:=$(PKG_BUILD_DIR)/pcie_mhi.ko
+   AUTOLOAD:=$(call AutoLoad,90,pcie_mhi)
++  DEPENDS:=@PCIE_SUPPORT
+ endef
+ 
+ define KernelPackage/pcie_mhi/description
 
 --- a/luci-app-packet-capture/Makefile
 +++ b/luci-app-packet-capture/Makefile
@@ -193,4 +206,3 @@
  LUCI_PKGARCH:=all
  
  include $(TOPDIR)/feeds/luci/luci.mk
- 

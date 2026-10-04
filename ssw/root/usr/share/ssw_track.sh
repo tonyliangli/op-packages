@@ -2,9 +2,7 @@
 
 # SIM slot switcher for HuastLink HC-G60 or ZBT-WE2806-A
 # or similiar cpe OpenWrt-routers
-# by Konstantine Shevlakov at <shevlakov@132lan.ru> 2025
-
-NODE="SW SIM"
+# by Konstantine Shevlakov at <shevlakov@132lan.ru> 2025-2026
 
 # config file stored in /etc/config/ssw
 # define gpios in /etc/config/system
@@ -33,19 +31,33 @@ NODE="SW SIM"
 #        option gpio 'sim'
 #        option value '1'
 
+# Schedule switch section example /etc/config/ssw:
+#
+# config schedule 'schedule'
+#        option enable '1'
+#        option time_on 'HH:MM'      # time to switch to reserve SIM (24h format)
+#        option duration '60'         # minutes until revert to default SIM (0 = no revert)
+#        option apn 'internet'        # APN for reserve SIM during schedule switch
+#        option period 'daily'        # daily | interval | weekly
+#        option period_days '3'       # for period=interval: every N days
+#        option weekday '1'           # for period=weekly: 0=Sun 1=Mon … 6=Sat
+
+
+NODE="SW SIM"
 
 # Get Variables
 get_vars(){
 	for v in enable interval revert rsrp times_rsrp apn1 apn2; do
-		eval $v=$(uci -q get ssw.failover.${v} 2>/dev/nul)
+		eval $v=$(uci -q get ssw.failover.${v} 2>/dev/null)
 	done
 	for d in modem sim; do
 		for s in gpio value; do
 			eval "${d}_${s}=$(uci -q get ssw.${d}.${s} 2>/dev/null)"
-		done 
+		done
 	done
 	[ -n "$interval" ] || interval=60
 	[ -n "$times_rsrp" ] || times_rsrp=5
+
 }
 
 # SIM Switch
@@ -68,33 +80,17 @@ sw_sim(){
 	set > /tmp/apn.ssw
 }
 
-# Revert rule switch
-sw_rule(){
-	if [ -f /tmp/ssw.vars ]; then
-		. /tmp/ssw.vars
-	fi
-	# Revert SIM card to default slot
-	if [ "$cur_sim" -ne "$sim_value" ]; then
-		if [ "$(date +%s)" -gt "$SWDATE" ]; then
-			logger -t "$NODE" "Revert to default SIM slot with $apn"
-			sw_sim
-		fi
-	fi
-}
-
 # Check interface state via mwan3
 monitor_mwan3(){
 	iface=$(uci show network | awk -F [.] '/devices/{print $2}')
-	# Check link status
 	if [ -r /tmp/run/mwan3/iface_state/$iface ]; then
 		link_status=$(cat /tmp/run/mwan3/iface_state/$iface | grep online | wc -l)
 	else
-		# Disable track link via mwan3
 		link_status=1
 	fi
 }
 
-# RSRP average value by modemmanager. Enable singnal monitor!
+# RSRP average value by modemmanager. Enable signal monitor!
 monitor_rsrp(){
 	device="$(uci show network | awk -F [=] '/devices/{gsub("'\''","");print $2}')"
 	SIGNAL="$(mmcli -J -m $device --signal-get)"
@@ -103,10 +99,10 @@ monitor_rsrp(){
 		CRSRP=$(echo "$SIGNAL" | jsonfilter -e '@["modem"][*]["5g"]["rsrp"]' | awk '{printf "%.0f\n", $1}')
 	fi
 
-	if [ $CRSRP -ne 0 ]; then
+	if [ -n "$CRSRP" ] && [ "$CRSRP" -ne "0" ]; then
 		echo $CRSRP >> /tmp/ssw_rsrp.var
 	fi
-	if [ $cnt -eq $times_rsrp ]; then
+	if [ "$cnt" -eq "$times_rsrp" ]; then
 		RSRP=$(awk '{sum+=$1} END { printf "%.0f\n", sum/NR }' /tmp/ssw_rsrp.var)
 		cat /dev/null > /tmp/ssw_rsrp.var
 		if [ $RSRP -lt $rsrp ]; then
@@ -131,6 +127,7 @@ cnt=1
 while true; do
 	get_vars
 	sleep $interval
+
 	if [ "$enable" = "1" ]; then
 		cur_sim=$(cat /sys/class/gpio/$sim_gpio/value)
 		monitor_rsrp
@@ -164,21 +161,7 @@ while true; do
 
 				uci commit network
 				reload_config network
-
-				if [ "$revert" = "1" ]; then
-					if [ "$cur_sim" -eq "$sim_value" ]; then 
-						FBT=${FBT:=$((($interval+$times_rsrp)*2))}
-						FBT=$(($FBT*2))
-						SWDATE=$((`date +%s`+$FBT))
-						echo "FBT=$FBT" > /tmp/ssw.vars
-						echo SWDATE=$SWDATE >> /tmp/ssw.vars
-						logger -t "$NODE" "Back to default SIM-slot after $(date -d @${SWDATE})"
-					fi
-				fi
 				sw_sim && sleep 20 && reload_iface &
-			fi
-			if [ "$revert" = "1" ]; then
-				sw_rule && sleep 20 && reload_iface &
 			fi
 			cnt=0
 		else

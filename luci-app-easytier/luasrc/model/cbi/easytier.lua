@@ -15,8 +15,8 @@ switch.rmempty = false
 
 etcmd = s:taboption("general", ListValue, "etcmd", translate("Startup Method"),
         translate("Official Web Console: <a href=\"https://easytier.cn/web\" target=\"_blank\">https://easytier.cn/web</a><br>"
-                .. "Official Configuration File Generator: <a href=\"https://easytier.cn/web/index.html#/config_generator\" target=\"_blank\">"
-                .. "https://easytier.cn/web/index.html#/config_generator</a><br>Please note to set the RPC port to 15888"))
+                .. "Official Configuration File Generator: <a href=\"https://easytier.cn/assistant\" target=\"_blank\">"
+                .. "https://easytier.cn/assistant</a><br>Please note to set the RPC port to 15888"))
 etcmd.default = "etcmd"
 etcmd:value("etcmd", translate("Default"))
 etcmd:value("config", translate("Configuration File"))
@@ -56,12 +56,6 @@ network_name = s:taboption("general", Value, "network_name", translate("Network 
 network_name.password = true
 network_name.placeholder = "easytier-name"
 network_name.maxlength = 64
-network_name.validate = function(self, value)
-    if value and value ~= "" and value:match("[^%w%-_]") then
-        return nil, translate("Only alphanumeric characters, hyphens and underscores allowed")
-    end
-    return value
-end
 network_name:depends("etcmd", "etcmd")
 
 network_secret = s:taboption("general", Value, "network_secret", translate("Network Secret"),
@@ -412,9 +406,28 @@ foreign_relay_bps_limit = s:taboption("privacy", Value, "foreign_relay_bps_limit
                 .. "(--foreign-relay-bps-limit parameter)"))
 foreign_relay_bps_limit:depends("etcmd", "etcmd")
 
-extra_args = s:taboption("privacy", Value, "extra_args", translate("Extra Parameters"),
+extra_args = s:taboption("privacy", DynamicList, "extra_args", translate("Extra Parameters"),
     translate("Additional command-line arguments passed to the backend process"))
-extra_args.placeholder = "--tcp-whitelist 80 --udp-whitelist 53"
+extra_args.placeholder = "--tcp-whitelist=80"
+extra_args.validate = function(self, value, section)
+    if type(value) == "table" then
+        local seen = {}
+        local i
+        for i = 1, #value do
+            local arg = value[i]
+            if arg then
+                arg = tostring(arg):match("^%s*(.-)%s*$")
+                if arg ~= "" then
+                    if seen[arg] then
+                        return nil, translate("Duplicate extra parameter") .. ": " .. arg
+                    end
+                    seen[arg] = true
+                end
+            end
+        end
+    end
+    return value
+end
 extra_args:depends("etcmd", "etcmd")
 
 log = s:taboption("general", ListValue, "log", translate("Program Log"),

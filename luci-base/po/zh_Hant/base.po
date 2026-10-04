@@ -9393,6 +9393,14 @@ msgctxt "nft redirect"
 msgid "Redirect to local system"
 msgstr "重新導向至本地系統"
 
+#: modules/luci-mod-system/htdocs/luci-static/resources/view/system/system.js
+msgid "Redirect LAN NTP requests to this device."
+msgstr "將區域網路 NTP 請求重新導向至本機。"
+
+#: modules/luci-mod-system/htdocs/luci-static/resources/view/system/system.js
+msgid "Redirect NTP requests"
+msgstr "重新導向區域網路 NTP 請求"
+
 #: modules/luci-mod-status/htdocs/luci-static/resources/view/status/iptables.js:57
 msgid "References"
 msgstr "引用"
@@ -12535,6 +12543,10 @@ msgstr "隧道介面使用的 TTL"
 msgid "Use as external overlay (/overlay)"
 msgstr "作為外部 overlay 使用 (/overlay)"
 
+#: modules/luci-mod-system/htdocs/luci-static/resources/view/system/mounts.js:275
+msgid "Use as Docker OPT (/opt)"
+msgstr "作為 Docker OPT 使用 (/opt)"
+
 #: modules/luci-mod-system/htdocs/luci-static/resources/view/system/mounts.js:273
 msgid "Use as root filesystem (/)"
 msgstr "作為根檔案系統使用 (/)"
@@ -13989,3 +14001,36 @@ msgstr "{example_nx} 返回 {nxdomain}。"
 #: modules/luci-compat/luasrc/view/cbi/delegator.htm:20
 msgid "« Back"
 msgstr "« 返回"
+
+#: modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/30_network.js
+msgid "Total download bandwidth"
+msgstr "下載總頻寬"
+
+#: modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/30_network.js
+msgid "Total upload bandwidth"
+msgstr "上傳總頻寬"
+
+#: modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/40_dhcp.js
+msgid "Total traffic"
+msgstr "總流量"
+
+msgid "Online"
+msgstr "在線"
+
+msgid "Offline"
+msgstr "離線"
+
+msgid "Online Hosts"
+msgstr "在線主機"
+
+msgid "Connection count"
+msgstr "連線數"
+
+msgid "Wireless scan failed: %s"
+msgstr "無線掃描失敗：%s"
+
+msgid "Export system log to TXT"
+msgstr "匯出系統日誌至 TXT"
+
+msgid "Export kernel log to TXT"
+msgstr "匯出核心日誌至 TXT"

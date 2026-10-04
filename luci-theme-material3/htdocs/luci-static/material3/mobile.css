@@ -2,10 +2,15 @@ header h3 a {
 	display: none !important;
 }
 
-footer {
-	width: 100%;
-	padding-left: 12px;
-	padding-right: 12px;
+:is(body[data-page="admin-status-overview"], body[data-page=""]) .cbi-title .label {
+	width: 32px;
+	padding: 0;
+	font-size: 0 !important;
+	gap: 0;
+}
+
+:is(body[data-page="admin-status-overview"], body[data-page=""]) .cbi-title .label::before {
+	flex: 0 0 auto;
 }
 
 @media screen and (max-device-width: 600px) {
@@ -28,8 +33,25 @@ footer {
 	.tabs>li>a,
 	.cbi-tabmenu>li>a {
 		padding: 0 12px;
-		line-height: 32px;
 		border-radius: var(--material3-card-radius);
+	}
+
+	body[data-page^="admin-services-dockerman"] #view div[style*="grid-template-columns"][style*="minmax(300px"] {
+		grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+	}
+
+	body[data-page^="admin-services-dockerman"] #view a[href*="/dockerman/"]>div[style*="min-height: 120px"] {
+		min-height: 96px !important;
+		padding: 10px !important;
+	}
+
+	body[data-page^="admin-services-dockerman"] #view a[href*="/dockerman/"] img[src*="dockerman/"][src$=".svg"] {
+		width: 52px !important;
+		height: 52px !important;
+	}
+
+	body[data-page^="admin-services-dockerman"] #view a[href*="/dockerman/"] div[style*="margin-right: 15px"] {
+		margin-right: 8px !important;
 	}
 
 	.table {
@@ -143,6 +165,9 @@ footer {
 	}
 
 	.tr.table-titles,
+	.tr.dashboard-table-titles,
+	.thead.dashboard-table-titles,
+	thead.dashboard-table-titles,
 	.cbi-section-table-titles,
 	.cbi-section-table-descr {
 		display: none;
@@ -189,6 +214,7 @@ footer {
 		max-width: 100%;
 		padding: 3px 2px;
 		flex-basis: 100%;
+		text-align: left;
 	}
 
 	.hide-sm,
@@ -235,6 +261,47 @@ footer {
 
 	.cbi-value label.cbi-value-title {
 		font-weight: bold;
+	}
+
+	.cbi-value:not(.hidden)[data-widget="CBI.FlagValue"]:has(> .cbi-value-field > .cbi-checkbox) {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) max-content;
+		align-items: center;
+		column-gap: 10px;
+	}
+
+	.cbi-value:not(.hidden)[data-widget="CBI.FlagValue"]:has(> .cbi-value-field > .cbi-checkbox)>label.cbi-value-title {
+		width: auto;
+		max-width: none;
+		padding: 0;
+		margin: 0;
+		text-align: left;
+		text-indent: 0;
+		white-space: normal;
+	}
+
+	.cbi-value:not(.hidden)[data-widget="CBI.FlagValue"]:has(> .cbi-value-field > .cbi-checkbox)>.cbi-value-field {
+		display: contents;
+	}
+
+	.cbi-value:not(.hidden)[data-widget="CBI.FlagValue"]:has(> .cbi-value-field > .cbi-checkbox)>.cbi-value-field>.cbi-checkbox {
+		grid-column: 2;
+	}
+
+	.cbi-value:not(.hidden)[data-widget="CBI.FlagValue"]:has(> .cbi-value-field > .cbi-checkbox)>.cbi-value-field>.cbi-value-description {
+		grid-column: 1 / -1;
+		width: auto;
+		max-width: calc(100% - 1.25em);
+		box-sizing: border-box;
+		margin: .25em 0 0 1.25em;
+	}
+
+	.cbi-value-description:not(:empty)::before {
+		top: 0;
+	}
+
+	.cbi-value.hidden {
+		display: none !important;
 	}
 
 	.cbi-value-field,
@@ -301,23 +368,39 @@ footer {
 		padding: 8px;
 	}
 
-	[data-page="admin-status-overview"] .td[width="33%"] {
+	:is([data-page="admin-status-overview"], [data-page=""]) .td[width="33%"] {
 		flex-basis: 33%;
 	}
 
-	[data-page="admin-status-overview"] .table {
-		margin: 4px;
-		width: calc(100% - 8px);
-	}
-
-	[data-page="admin-status-overview"] .table,
-	[data-page="admin-status-overview"] .tr,
-	[data-page="admin-status-overview"] .td,
-	[data-page="admin-status-overview"] .th,
-	[data-page="admin-status-overview"] .tr[data-title]::before,
-	[data-page="admin-status-overview"] .td[data-title]::before {
+	:is([data-page="admin-status-overview"], [data-page=""]) .table,
+	:is([data-page="admin-status-overview"], [data-page=""]) .tr,
+	:is([data-page="admin-status-overview"], [data-page=""]) .td,
+	:is([data-page="admin-status-overview"], [data-page=""]) .th,
+	:is([data-page="admin-status-overview"], [data-page=""]) .tr[data-title]::before,
+	:is([data-page="admin-status-overview"], [data-page=""]) .td[data-title]::before {
 		border-top: 0;
 		border-bottom: 0;
+	}
+
+	:is([data-page="admin-dashboard"], [data-page="admin"], [data-page=""]) :is(.Dashboard, .dashboard-bg.box-s1) .td[data-title]::before {
+		word-break: keep-all;
+	}
+
+	:is([data-page="admin-dashboard"], [data-page="admin"], [data-page=""]) .Dashboard .devices-list .devices-info .tr .td {
+		padding: 3px !important;
+	}
+
+	:is([data-page="admin-dashboard"], [data-page="admin"], [data-page=""]) .Dashboard .router-status-wifi.dashboard-bg.box-s1 .assoclist.devices-info.table>.tr:not(.dashboard-table-titles)>.td {
+		display: block;
+		flex: 0 0 50% !important;
+		width: 50% !important;
+		max-width: 50%;
+		min-width: 0;
+	}
+
+	:is([data-page="admin-dashboard"], [data-page="admin"], [data-page=""]) .Dashboard .router-status-wifi.dashboard-bg.box-s1 .assoclist.devices-info .cbi-progressbar {
+		width: 100% !important;
+		min-width: 0 !important;
 	}
 
 	header .pull-right .label {
@@ -483,7 +566,7 @@ footer {
 	}
 
 	body[data-page="admin-network-wireless"] .td[data-name="_badge"] {
-		max-width: 50px;
+		max-width: 90px;
 		align-self: center;
 	}
 

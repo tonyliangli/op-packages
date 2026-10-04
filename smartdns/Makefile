@@ -5,8 +5,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=smartdns
-PKG_VERSION:=47.1
-PKG_RELEASE:=1
+PKG_VERSION:=48.4
+PKG_RELEASE:=5
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/pymumu/smartdns/tar.gz/Release$(PKG_VERSION)?
@@ -16,6 +16,7 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-Release$(PKG_VERSION)
 PKG_MAINTAINER:=Nick Peng <pymumu@gmail.com>
 PKG_LICENSE:=GPL-3.0-or-later
 PKG_LICENSE_FILES:=LICENSE
+PKG_CPE_ID:=cpe:/a:pymumu:smartdns
 
 PKG_CONFIG_DEPENDS:=CONFIG_PACKAGE_smartdns-ui
 PKG_BUILD_DEPENDS:=PACKAGE_smartdns-ui:node/host PACKAGE_smartdns-ui:rust-bindgen/host
@@ -28,7 +29,7 @@ include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/rust/rust-package.mk
 
 MAKE_PATH:=src
-MAKE_VARS+= VER=$(PKG_VERSION)
+MAKE_VARS+= VER=$(PKG_VERSION) WITH_ZLIB=0
 
 define Package/smartdns/Default
   SECTION:=net
@@ -53,7 +54,7 @@ endef
 define Package/smartdns-ui
   $(call Package/smartdns/Default)
   TITLE+= dashboard
-  DEPENDS:=+smartdns $(RUST_ARCH_DEPENDS) @!(TARGET_x86_geode||TARGET_x86_legacy)
+  DEPENDS:=+smartdns $(RUST_ARCH_DEPENDS) @!i386
 endef
 
 define Package/smartdns-ui/description
@@ -72,9 +73,9 @@ endef
 define Download/smartdns-webui
   PROTO:=git
   URL:=https://github.com/pymumu/smartdns-webui.git
-  SOURCE_DATE:=2025-10-25
-  SOURCE_VERSION:=a673732fd541bbd33e3677e6315cf8a9ce3bf248
-  MIRROR_HASH:=2dc08e54f36ba9427d628979494b44fc6963a51cbf3fb62b197f65c3e33a6095
+  SOURCE_DATE:=2026-07-29
+  SOURCE_VERSION:=1c06fee693434ec7c71f06010d3f87416baba9f0
+  MIRROR_HASH:=1b718d1288f6ddbdd80e3a948dda1693fd7bc8079fdb65be121f64f23ce53849
   SUBDIR:=smartdns-webui-$$$$(subst -,.,$$$$(SOURCE_DATE))~$$$$(call version_abbrev,$$$$(SOURCE_VERSION))
   FILE:=$$(SUBDIR).tar.zst
 endef
@@ -103,6 +104,7 @@ ifneq ($(CONFIG_PACKAGE_smartdns-ui),)
 		pushd plugin/smartdns-ui ; \
 		$(CARGO_PKG_CONFIG_VARS) \
 		MAKEFLAGS="$(PKG_JOBS)" \
+		WITH_ZLIB=0 \
 		TARGET_CFLAGS="$(filter-out -O%,$(TARGET_CFLAGS)) $(RUSTC_CFLAGS)" \
 		BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(TOOLCHAIN_ROOT_DIR)" \
 		cargo build -v --profile $(CARGO_PKG_PROFILE) \

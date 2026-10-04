@@ -1,3 +1,19 @@
+--- a/luci-app-quickstart/luasrc/view/quickstart/main.htm
++++ b/luci-app-quickstart/luasrc/view/quickstart/main.htm
+@@ -47,6 +47,12 @@
+           location.href = vue_prefix;
+         }
+       }
++    setTimeout(() => {
++  	  const targetDiv = document.querySelector('div[style*="background-color: rgb(251, 245, 250)"]');
++  	  if (targetDiv) {
++  	  targetDiv.style.display = 'none';
++  	  }
++    }, 500);
+     })();
+ </script>
+ <div id="app">
+
 --- a/luci-app-quickstart/Makefile
 +++ b/luci-app-quickstart/Makefile
 @@ -6,7 +6,7 @@
@@ -21,3 +37,20 @@
          entry({"admin", "network_guide"}, call("networkguide_index"), _("NetworkGuide"), 2)
          entry({"admin", "network_guide", "pages"}, call("quickstart_index", {index={"admin", "network_guide", "pages"}})).leaf = true
          if uci:get("quickstart", "main", "wifi_menu") == "1" then
+diff --git a/luci-app-quickstart/root/usr/share/luci/menu.d/luci-app-quickstart.json b/luci-app-quickstart/root/usr/share/luci/menu.d/luci-app-quickstart.json
+deleted file mode 100644
+index d1667bb..0000000
+--- a/luci-app-quickstart/root/usr/share/luci/menu.d/luci-app-quickstart.json
++++ /dev/null
+@@ -1,10 +0,0 @@
+-{
+-	"admin/quickstart/*": {
+-		"title": "QuickStart",
+-		"order": 1,
+-		"action": {
+-			"type": "template",
+-			"path": "quickstart/home"
+-		}
+-	}
+-}
+\ No newline at end of file

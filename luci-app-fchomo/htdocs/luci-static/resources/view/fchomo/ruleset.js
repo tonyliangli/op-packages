@@ -11,7 +11,7 @@ const parseRulesetYaml = hm.parseYaml.extend({
 		if (!cfg.type)
 			return null;
 
-		// key mapping // 2026/01/17
+		// key mapping // 2026/06/06
 		let config = hm.removeBlankAttrs({
 			id: this.id,
 			label: this.label,
@@ -22,9 +22,10 @@ const parseRulesetYaml = hm.parseYaml.extend({
 				payload: cfg.payload, // string: array
 			} : {
 				url: cfg.url,
+				path_in_bundle: cfg["path-in-bundle"],
 				size_limit: cfg["size-limit"],
 				interval: cfg.interval,
-				proxy: cfg.proxy ? hm.preset_outbound.full.map(([key, label]) => key).includes(cfg.proxy) ? cfg.proxy : this.calcID(hm.glossary["proxy_group"].field, cfg.proxy) : null,
+				proxy: cfg.proxy ? hm.preset_outbound.direct.map(([key, label]) => key).includes(cfg.proxy) ? cfg.proxy : this.calcID(hm.glossary["proxy_group"].field, cfg.proxy) : null,
 				header: cfg.header ? JSON.stringify(cfg.header, null, 2) : null, // string: object
 			})
 		});
@@ -58,6 +59,8 @@ async function parseRulesetLink(section_type, uri) {
 			var behavior = url.searchParams.get('behav');
 			var interval = url.searchParams.get('sec');
 			var rawquery = url.searchParams.get('rawq');
+			var header = url.searchParams.get('hdr');
+			var path_in_bundle = url.searchParams.get('bpath');
 			var name = hm.toUciname(decodeURI(url.pathname).split('/').pop());
 
 			if (filefmt.test(format) && filebehav.test(behavior)) {
@@ -68,7 +71,11 @@ async function parseRulesetLink(section_type, uri) {
 					format: format,
 					behavior: behavior,
 					url: String.format('%s://%s', uri[0], fullpath),
+					header: header?.match(/^H4sI/) // Gzip magic + Deflate
+								? await hm.decompressGzip(header, true)
+								: hm.decodeBase64(header, true),
 					interval: interval,
+					path_in_bundle: path_in_bundle ? decodeURIComponent(path_in_bundle) : null,
 					id: hm.calcStringMD5(String.format('http://%s', fullpath))
 				};
 			}
@@ -79,6 +86,7 @@ async function parseRulesetLink(section_type, uri) {
 			var format = url.searchParams.get('fmt');
 			var behavior = url.searchParams.get('behav');
 			var filler = url.searchParams.get('fill');
+			var path_in_bundle = url.searchParams.get('bpath');
 			var path = decodeURI(url.pathname);
 			var name = hm.toUciname(path.split('/').pop());
 
@@ -88,6 +96,7 @@ async function parseRulesetLink(section_type, uri) {
 					type: 'file',
 					format: format,
 					behavior: behavior,
+					path_in_bundle: path_in_bundle ? decodeURIComponent(path_in_bundle) : null,
 					id: hm.calcStringMD5(String.format('file://%s%s', url.host, url.pathname))
 				};
 				if (filler?.match(/^H4sI/)) // Gzip magic + Deflate
@@ -125,12 +134,14 @@ return view.extend({
 	load() {
 		return Promise.all([
 			uci.load('fchomo'),
+			hm.getFeatures(),
 			hm.decompressGzip(hm.rulesetdoc[1], true).then((res) => { return hm.rulesetdoc[0] + hm.encodeBase64(res); })
 		]);
 	},
 
 	render(data) {
-		const rulesetdoc = data[1];
+		const features = data[1];
+		const rulesetdoc = data[2];
 
 		let m, s, o;
 
@@ -180,6 +191,13 @@ return view.extend({
 							"      - 'application/vnd.github.v3.raw'\n" +
 							'      Authorization:\n' +
 							"      - 'token 1231231'\n" +
+							'  cn:\n' +
+							'    type: http\n' +
+							'    path: ./provider/rule-set/geosite-cn.mrs\n' +
+							'    url: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs"\n' +
+							'    behavior: domain\n' +
+							'    format: mrs\n' +
+							'    path-in-bundle: "geo/geosite/cn.mrs"\n' +
 							'  rule4:\n' +
 							'    type: inline\n' +
 							'    behavior: domain\n' +
@@ -199,7 +217,8 @@ return view.extend({
 					.format('file, http, inline', 'text, yaml, mrs') +
 					_('Please refer to <a href="%s" target="_blank">%s</a> for link format standards.')
 						.format(rulesetdoc, _('Ruleset-URI-Scheme')));
-			o.placeholder = 'http(s)://github.com/ACL4SSR/ACL4SSR/raw/refs/heads/master/Clash/Providers/BanAD.yaml?fmt=yaml&behav=classical&rawq=good%3Djob#BanAD\n' +
+			o.placeholder = 'https://github.com/ACL4SSR/ACL4SSR/raw/refs/heads/master/Clash/Providers/BanAD.yaml?fmt=yaml&behav=classical&rawq=good%3Djob#BanAD\n' +
+							'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs?fmt=mrs&behav=domain&bpath=geo%2Fgeosite%2Fcn.mrs&hdr=eyJVc2VyLUFnZW50IjpbIm1paG9tby8xLjE4LjMiXX0K#CN-Site\n' +
 							'file:///example.txt?fmt=text&behav=domain&fill=LmNuCg#CN%20TLD\n' +
 							'inline://LSAnLmhrJwoK?behav=domain#HK%20TLD\n' +
 							'inline://H4sIAAAAAAACA9NVUNcrKVcHANszKpEHAAAA?behav=domain#TW%20TLD\n';
@@ -269,6 +288,7 @@ return view.extend({
 				['select', 'type'],
 				['select', 'behavior'],
 				['select', 'format'],
+				['input', 'path_in_bundle'],
 				['textarea', '_editer']
 			], ...arguments);
 		}
@@ -373,6 +393,12 @@ return view.extend({
 		o.depends('type', 'http');
 		o.modalonly = true;
 
+		o = s.option(form.Value, 'path_in_bundle', _('Path in bundle'),
+			_('Path in bundle: <code>%s</code>').format('BundleMRS.7z'));
+		o.placeholder = 'geo/geosite/cn.mrs';
+		o.depends('format', 'mrs');
+		o.modalonly = true;
+
 		o = s.option(form.Value, 'size_limit', _('Size limit'),
 			_('In bytes. <code>%s</code> will be used if empty.').format('0'));
 		o.placeholder = '0';
@@ -391,7 +417,12 @@ return view.extend({
 		hm.preset_outbound.direct.forEach((res) => {
 			o.value.apply(o, res);
 		})
-		o.load = L.bind(hm.loadProxyGroupLabel, o, hm.preset_outbound.direct);
+		o.load = function(section_id) {
+			return hm.loadLabel.call(this, [
+				...hm.preset_outbound.direct,
+				...hm.loadLabelValues(this.config, 'proxy_group')
+			], section_id);
+		}
 		o.textvalue = hm.textvalue2Value;
 		//o.editable = true;
 		o.depends('type', 'http');
@@ -405,6 +436,12 @@ return view.extend({
 
 		o = s.option(form.DummyValue, '_update');
 		o.cfgvalue = hm.renderResDownload;
+		o.editable = true;
+		o.modalonly = false;
+
+		o = s.option(form.DummyValue, '_link');
+		o.cfgvalue = hm.renderResLink;
+		o.readonly = features.has_luci_app_tinyfilemanager ? false : _('luci-app-tinyfilemanager is not installed, please install it first.');
 		o.editable = true;
 		o.modalonly = false;
 		/* Rule set END */

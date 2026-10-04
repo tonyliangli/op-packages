@@ -1,0 +1,24 @@
+#!/bin/sh
+[ ! -f "/usr/share/ucitrack/luci-app-passwall2_server.json" ] && {
+    cat > /usr/share/ucitrack/luci-app-passwall2_server.json << EEOF
+{
+    "config": "passwall2_server",
+    "init": "passwall2_server"
+}
+EEOF
+}
+
+if [ -e "/etc/config/ucitrack" ]; then
+	uci -q batch <<-EOF
+		delete ucitrack.@passwall2_server[-1]
+		add ucitrack passwall2_server
+		set ucitrack.@passwall2_server[-1].init=passwall2_server
+		commit ucitrack
+EOF
+fi
+
+rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
+rm -rf /tmp/luci-modulecache/
+killall -HUP rpcd 2>/dev/null
+
+exit 0

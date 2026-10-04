@@ -37,8 +37,9 @@ start_service() {
 		program=
 
 		[BitTorrent]
+		Session\AddTrackersFromURLEnabled=true
+		Session\AdditionalTrackersURL=https://trackerslist.com/all.txt
 		Session\AutoBanUnknownPeer=true
-		Session\AutoUpdateTrackersEnabled=true
 		Session\DefaultSavePath=$download_dir
 
 		[LegalNotice]
@@ -48,7 +49,7 @@ start_service() {
 		Cookies=@Invalid()
 
 		[Preferences]
-		Bittorrent\CustomizeTrackersListUrl=https://trackerslist.com/all.txt
+		General\Locale=zh_CN
 		WebUI\CSRFProtection=false
 		WebUI\Password_PBKDF2="@ByteArray(zH92gnE9xijRN5IjzIPU+A==:+JxpKBWsSyuzpm/9LrhO2uLQSGsBS5giqF0AYRU8COcMXn5AIaSsL2S9hIuB20wkhsMfEoN+77Q9BmAd3ysYxw==)"
 		WebUI\Port=$http_port
@@ -73,8 +74,4 @@ stop_service() {
 
 service_triggers() {
 	procd_add_reload_trigger "$CONF"
-}
-
-reload_service() {
-	restart
 }

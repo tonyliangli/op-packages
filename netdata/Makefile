@@ -8,8 +8,8 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=netdata
-PKG_VERSION:=2.10.3
-PKG_RELEASE:=10
+PKG_VERSION:=2.12.0
+PKG_RELEASE:=20
 
 PKG_MAINTAINER:=Josef Schlehofer <pepe.schlehofer@gmail.com>, Daniel Engberg <daniel.engberg.lists@pyret.net>
 PKG_LICENSE:=GPL-3.0-or-later
@@ -83,6 +83,9 @@ CMAKE_OPTIONS += \
 	-DENABLE_PLUGIN_SYSTEMD_JOURNAL=Off \
 	-DENABLE_PLUGIN_SYSTEMD_UNITS=Off \
 	-DENABLE_PLUGIN_XENSTAT=Off \
+	-DENABLE_PLUGIN_NETWORK_VIEWER=Off \
+	-DSQLITE_USE_GIT=On \
+	-DUSE_MOLD=Off \
 	-DENABLE_WEBRTC=Off
 
 define Package/netdata/conffiles
@@ -128,6 +131,8 @@ define Package/netdata/install
 	$(CP) $(PKG_INSTALL_DIR)/usr/share/netdata $(1)/usr/share
 	$(CP) $(1)/usr/share/netdata/web/v3/* $(1)/usr/share/netdata/web/
 	rm -r $(1)/usr/share/netdata/web/v3/*
+	rm -r $(1)/usr/share/netdata/web/static/*
+	rm -r $(1)/usr/share/netdata/web/3D_PARTY_LICENSES.txt
 	rm $(1)/usr/share/netdata/build-info-cmake-cache.gz
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/netdata.init $(1)/etc/init.d/netdata

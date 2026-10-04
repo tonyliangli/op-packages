@@ -9,6 +9,28 @@ USE_PROCD=1
 . /usr/lib/unbound/iptools.sh
 . /lib/functions/network.sh
 
+restart_scheduler_dependent_services() {
+	local proxy vpn
+	proxy="$(uci -q get openmptcprouter.settings.proxy)"
+	case "$proxy" in
+		shadowsocks) /etc/init.d/shadowsocks-libev restart >/dev/null 2>&1 ;;
+		shadowsocks-rust|shadowsocks-go) /etc/init.d/shadowsocks-rust restart >/dev/null 2>&1 ;;
+		v2ray*) /etc/init.d/v2ray restart >/dev/null 2>&1 ;;
+		xray*) /etc/init.d/xray restart >/dev/null 2>&1 ;;
+	esac
+
+	vpn="$(uci -q get openmptcprouter.settings.vpn)"
+	case "$vpn" in
+		openvpn) /etc/init.d/openvpn restart >/dev/null 2>&1 ;;
+		openvpn_bonding)
+			/etc/init.d/openvpn restart >/dev/null 2>&1
+			/etc/init.d/openvpnbonding restart >/dev/null 2>&1
+			;;
+		glorytun_tcp) /etc/init.d/glorytun restart >/dev/null 2>&1 ;;
+	esac
+	logger -t "MPTCP" "Scheduler changed, restarted proxy=${proxy:-none} vpn=${vpn:-none} (vpn restart skipped unless TCP-based)"
+}
+
 global_multipath_settings() {
 	local multipath mptcp_path_manager mptcp_scheduler mptcp_subflows mptcp_debug mptcp_add_addr_accepted congestion mptcp_checksum mptcp_syn_retries mptcp_fullmesh_num_subflows mptcp_fullmesh_create_on_err mptcp_ndiffports_num_subflows mptcp_rr_cwnd_limited mptcp_rr_num_segments
 	local multipath_status=0
@@ -30,7 +52,11 @@ global_multipath_settings() {
 	config_get mptcp_rr_num_segments globals mptcp_rr_num_segments
 	config_get mptcp_version globals mptcp_version "0"
 	config_get mptcp_stale_loss_cnt globals mptcp_stale_loss_cnt "4"
-	config_get mptcp_pm_type globals mptcp_pm_type "1"
+	# Fallback matches the uci-defaults / LuCI form default (in-kernel PM):
+	# an absent value must NOT resolve to userspace PM, or a config save
+	# that drops this option (see issue #4349) silently disables in-kernel
+	# fullmesh subflow creation and breaks multi-WAN bonding.
+	config_get mptcp_pm_type globals mptcp_pm_type "0"
 	config_get mptcp_allow_join_initial_addr_port globals mptcp_allow_join_initial_addr_port "1"
 	config_get mptcp_close_timeout globals mptcp_close_timeout "60"
 	config_get mptcp_blackhole_timeout globals mptcp_blackhole_timeout "3600"
@@ -47,7 +73,14 @@ global_multipath_settings() {
 			echo "net.mptcp.mptcp_enabled=${multipath_status}" >> /etc/sysctl.d/zzz_openmptcprouter.conf
 		fi
 		[ -z "$mptcp_path_manager" ] || sysctl -qew net.mptcp.mptcp_path_manager="$mptcp_path_manager"
-		[ -z "$mptcp_scheduler" ] || sysctl -qew net.mptcp.mptcp_scheduler="$mptcp_scheduler"
+		if [ -n "$mptcp_scheduler" ]; then
+			local prev_sched="$(cat /proc/sys/net/mptcp/mptcp_scheduler 2>/dev/null)"
+			sysctl -qew net.mptcp.mptcp_scheduler="$mptcp_scheduler"
+			# Restart dependents only when the live scheduler actually changed
+			# (a rejected value leaves it as it was).
+			local new_sched="$(cat /proc/sys/net/mptcp/mptcp_scheduler 2>/dev/null)"
+			[ -n "$prev_sched" ] && [ -n "$new_sched" ] && [ "$prev_sched" != "$new_sched" ] && restart_scheduler_dependent_services
+		fi
 		[ -z "$mptcp_checksum" ] || sysctl -qew net.mptcp.mptcp_checksum="$mptcp_checksum"
 		[ -z "$mptcp_debug" ] || sysctl -qew net.mptcp.mptcp_debug="$mptcp_debug"
 		[ -z "$mptcp_syn_retries" ] || sysctl -qew net.mptcp.mptcp_syn_retries="$mptcp_syn_retries"
@@ -65,6 +98,11 @@ global_multipath_settings() {
 			echo "net.mptcp.enabled=${multipath_status}" >> /etc/sysctl.d/zzz_openmptcprouter.conf
 		fi
 		ip mptcp limits set add_addr_accepted $mptcp_add_addr_accepted subflows $mptcp_subflows >/dev/null 2>&1
+		# The subflow limit decides how many socket buffers one MPTCP connection
+		# can hold open at once, and they all draw on the same net.ipv4.tcp_mem
+		# pool, so re-run the sizing now that the limit is known. Cheap and
+		# idempotent: it only rewrites its sysctl.d file when values change.
+		[ -x /bin/omr-net-mem ] && /bin/omr-net-mem --quiet >/dev/null 2>&1
 		#[ -z "$mptcp_debug" ] || sysctl -qew net.mptcp.mptcp_debug="$mptcp_debug"
 		[ -z "$mptcp_add_addr_timeout" ] || sysctl -qew net.mptcp.add_addr_timeout="$mptcp_add_addr_timeout"
 		[ -z "$mptcp_checksum" ] || sysctl -qew net.mptcp.checksum_enabled="$mptcp_checksum"
@@ -75,13 +113,52 @@ global_multipath_settings() {
 		[ -z "$mptcp_syn_retrans_before_tcp_fallback" ] || sysctl -qew net.mptcp.syn_retrans_before_tcp_fallback="$mptcp_syn_retrans_before_tcp_fallback"
 		[ -z "$mptcp_blackhole_timeout" ] || sysctl -qew net.mptcp.blackhole_timeout="$mptcp_blackhole_timeout"
 		if [ -n "$mptcp_scheduler" ]; then
-			if [ -d /usr/share/bpf/scheduler ]; then
-				for scheduler in /usr/share/bpf/scheduler/*.o; do
-					[ -f "$scheduler" ] && bpftool struct_ops register "$scheduler" >/dev/null 2>&1
-				done
-			fi
 			local sched="${mptcp_scheduler#mptcp_}"; sched="${sched%.o}"
+			local prev_sched="$(cat /proc/sys/net/mptcp/scheduler 2>/dev/null)"
+			if [ -d /usr/share/bpf/scheduler ]; then
+				local pin_dir="/sys/fs/bpf/mptcp"
+				mkdir -p "$pin_dir"
+				# Unregister any previously pinned struct_ops to avoid conflicts.
+				# Deleting the pinned link is what unregisters it; bpftool's
+				# "unregister" takes a map id or name, never a pinned path, so
+				# `unregister pinned "$pin"` exited 255 on a usage error and the
+				# `&& rm -f` behind it never ran. Pins then accumulated, every
+				# scheduler ever selected stayed registered, and re-registering
+				# a rebuilt object failed with "File exists" -- silently, since
+				# the output was discarded, so the router kept running the OLD
+				# program after an upgrade shipped a fixed one.
+				for pin in "$pin_dir"/*; do
+					[ -e "$pin" ] || continue
+					rm -f "$pin"
+				done
+				local obj="/usr/share/bpf/scheduler/mptcp_${sched}.o"
+				if [ -f "$obj" ]; then
+					local reg_err
+					reg_err="$(bpftool struct_ops register "$obj" "$pin_dir/" 2>&1)" || \
+						logger -t "MPTCP" "Failed to register BPF scheduler $obj: $reg_err"
+				fi
+			fi
+			# Only a scheduler the kernel lists can be set. A legacy name left
+			# in uci ('blest' from the v0.9x defaults is not a 6.x scheduler)
+			# or a BPF object that failed to register makes the sysctl fail;
+			# fall back to 'default' rather than silently keeping whatever was
+			# live. The restart decision below compares what was live before
+			# with what is live after: comparing against the requested name
+			# restarted the proxy on every single reload while the request
+			# kept failing (27 "Scheduler changed" restarts in one test run).
+			local avail_sched="$(cat /proc/sys/net/mptcp/available_schedulers 2>/dev/null)"
+			if [ -n "$avail_sched" ]; then
+				case " $avail_sched " in
+					*" $sched "*) ;;
+					*)
+						logger -t "MPTCP" "Scheduler '$sched' is not available (kernel offers: $avail_sched), using 'default'"
+						sched="default"
+						;;
+				esac
+			fi
 			sysctl -qew net.mptcp.scheduler="$sched" >/dev/null 2>&1
+			local new_sched="$(cat /proc/sys/net/mptcp/scheduler 2>/dev/null)"
+			[ -n "$prev_sched" ] && [ -n "$new_sched" ] && [ "$prev_sched" != "$new_sched" ] && restart_scheduler_dependent_services
 		fi
 	fi
 	[ -z "$congestion" ] || sysctl -qew net.ipv4.tcp_congestion_control="$congestion"
@@ -123,7 +200,18 @@ interface_max_metric() {
 		loopback)
 			;;
 		*)
-			config_get metric "$config" ip4table
+			# Called with the openmptcprouter config loaded, where the routing
+			# table id lives in "metric" (network.<iface>.ip4table is the same
+			# value in the network config): reading ip4table here always got an
+			# empty string, so every WAN raised a shell "out of range" error and
+			# count stayed 0. Interfaces added afterwards then restarted metric
+			# allocation from 1 in interface_multipath_settings and collided with
+			# the routing tables, route metrics and MPTCP endpoint ids of the
+			# existing ones.
+			config_get metric "$config" metric
+			case "$metric" in
+				''|*[!0-9]*) return 0 ;;
+			esac
 			if [ "$metric" -gt "$count" ] && [ "$metric" -lt "1000" ]; then
 				count=$metric
 			fi
@@ -131,10 +219,41 @@ interface_max_metric() {
 	esac
 }
 
+# sqm-scripts (cake / htb+fq_codel / hfsc set up by /usr/lib/sqm) and
+# qos-scripts own the root qdisc of the devices they shape. Replacing it with
+# fq below silently deleted the egress shaper on every "mptcp reload <device>"
+# (tracker status change, IP change, ifup hotplug) while SQM's state file still
+# claimed it was running, so SQM never re-applied it until its next restart:
+# LuCI and the wizard showed SQM enabled, tc showed plain fq (#4329).
+# Leave the root qdisc alone whenever another shaper manages this device.
+_root_qdisc_managed_elsewhere() {
+	local dev="$1" config="$2" state_dir sec
+	[ -n "$dev" ] || return 1
+	state_dir="$(. /etc/sqm/sqm.conf 2>/dev/null; echo "${SQM_STATE_DIR:-/var/run/sqm}")"
+	[ -f "${state_dir}/${dev}.state" ] && return 0
+	# an enabled sqm queue on this device: named after the interface by the
+	# wizard, or an anonymous section created from the LuCI SQM page
+	for sec in $(uci -q show sqm 2>/dev/null | sed -n "s/^sqm\.\([^.]*\)\.interface='${dev}'\$/\1/p"); do
+		[ "$(uci -q get sqm.${sec}.enabled)" = "1" ] && return 0
+	done
+	[ "$(uci -q get qos.${config}.enabled)" = "1" ] && return 0
+	# omr-quota shapes an interface whose quota is exceeded with a tbf root
+	# qdisc (throttle action, daily-budget speed limit); nothing else in OMR
+	# installs tbf. Replacing it with fq lifted the quota's speed limit until
+	# the daemon's next poll -- on every ifup hotplug / tracker status change.
+	case "$(tc qdisc show dev "$dev" root 2>/dev/null)" in
+		"qdisc tbf "*) return 0 ;;
+	esac
+	return 1
+}
+
 interface_multipath_settings() {
-	local mode iface proto metric ip4table
+	local mode iface proto metric ip4table qdisc
 	local config="$1"
 	local intf="$2"
+	# DHCPv6 companion interfaces (<intf>_6) share the parent's device:
+	# processing them here would clobber the parent's multipath state
+	case "$config" in *_6) return 0 ;; esac
 	local enabled uci_route
 	uci_route=$(uci -q get openmptcprouter.settings.uci_route)
 
@@ -146,6 +265,7 @@ interface_multipath_settings() {
 
 	config_get enabled "$config" auto "1"
 	config_get txqueuelen "$config" txqueuelen
+	config_get qdisc "$config" qdisc
 	case "$iface" in *@*) iface=$(ifstatus "$config" | jsonfilter -q -e '@["device"]') ;; esac
 	if [ "$(uci -q get openmptcprouter.${config}.metric)" = "" ] || [ "$(uci -q get openmptcprouter.${config}.metric)" = "1" ]; then
 		count=$((count+1))
@@ -183,8 +303,15 @@ interface_multipath_settings() {
 		done
 	}
 	[ "$mode" = "" ] && {
+		# Migration path for configs that only ever had the mode in the
+		# openmptcprouter copy. Log it: it also fires when something dropped
+		# network.<iface>.multipath behind the user's back, in which case the
+		# interface silently comes back in its previous mode (#4368).
 		mode="$(uci -q get openmptcprouter.${config}.multipath)"
-		[ -n "$mode" ] && uci -q set network.${config}.multipath="$mode"
+		[ -n "$mode" ] && {
+			logger -t "MPTCP" "No multipath setting for $config, restoring $mode from openmptcprouter config"
+			uci -q set network.${config}.multipath="$mode"
+		}
 	}
 	[ "$mode" = "" ] && {
 		[ "$config" = "lan" ] && mode="off"
@@ -196,6 +323,12 @@ interface_multipath_settings() {
 		uci -q set openmptcprouter.${config}.multipath="$mode"
 	}
 	[ "$mode" != "off" ] && {
+		# LRO, TSO and UFO break MPTCP packets scheduling, always disable them on multipath interfaces
+		[ -n "$iface" ] && {
+			for offload in lro tso ufo; do
+				ethtool -K $iface $offload off >/dev/null 2>&1
+			done
+		}
 		[ -n "$mptcpintf" ] && mptcpintf="$mptcpintf $iface"
 		[ -z "$mptcpintf" ] && mptcpintf="$iface"
 		[ -z "$mptcpmintf" ] && mptcpmintf="$config"
@@ -267,6 +400,7 @@ interface_multipath_settings() {
 	elif [ "$proto" != "gre" ]; then
 		network_get_ipaddr ipaddr $config
 		[ -z "$ipaddr" ] && ipaddr=$(ip -4 addr show dev $iface | awk '/inet / {print $2; exit}' | cut -d/ -f1 | tr -d "\n")
+		[ -z "$ipaddr" ] && ipaddr=$(uci -q get "network.$config.ipaddr" | cut -d/ -f1 | tr -d "\n")
 		network_get_gateway gateway $config true
 		[ -z "$gateway" ] && gateway=$(ip -4 r list dev $iface | grep -v default | awk '/proto static/ {print $1}' | tr -d "\n")
 		[ -z "$gateway" ] && gateway=$(uci -q get "network.$config.gateway")
@@ -291,6 +425,9 @@ interface_multipath_settings() {
 		[ -n "$netmask" ] && [ "$(echo $netmask | grep '/')" != "" ] && netmask=""
 		[ -z "$netmask" ] && netmask=$(ip -4 addr show dev $iface | awk '/peer/ {print $4; exit}' | cut -d/ -f2 | tr -d "\n")
 		[ -z "$netmask" ] && netmask=$(ip -4 addr show dev $iface | awk '/inet / {print $2;exit}' | cut -d/ -f2 | tr -d "\n")
+		[ -z "$netmask" ] && netmask=$(uci -q get "network.$config.netmask")
+		[ -z "$netmask" ] && [ -n "$ipaddr" ] && [ -n "$gateway" ] && \
+			[ "$(echo $ipaddr | cut -d. -f1-3)" = "$(echo $gateway | cut -d. -f1-3)" ] && netmask="24"
 		[ -n "$ipaddr" ] && ipaddr=$(echo $ipaddr | cut -d/ -f1 | tr -d "\n")
 		[ -n "$ipaddr" ] && [ -n "$netmask" ] && netmask=`ipcalc.sh $ipaddr/$netmask | sed -n '/PREFIX=/{;s/.*=//;s/ .*//;p;}'`
 		[ -n "$ipaddr" ] && [ -n "$netmask" ] && network=`ipcalc.sh $ipaddr/$netmask | sed -n '/NETWORK=/{;s/.*=//;s/ .*//;p;}'`
@@ -360,6 +497,7 @@ interface_multipath_settings() {
 			#ifconfig $iface txqueuelen 1000 > /dev/null 2>&1
 			ip link set dev $iface txqueuelen 1000 > /dev/null 2>&1
 		fi
+		_root_qdisc_managed_elsewhere "$iface" "$config" || tc qdisc replace dev $iface root ${qdisc:-fq} > /dev/null 2>&1
 	fi
 	if [ -z "$gateway" ] && [ -n "$network" ]; then
 		if [ "$uci_route" = "1" ]; then
@@ -395,6 +533,7 @@ interface_multipath_settings() {
 			#ifconfig $iface txqueuelen 1000 > /dev/null 2>&1
 			ip link set dev $iface txqueuelen 1000 > /dev/null 2>&1
 		fi
+		_root_qdisc_managed_elsewhere "$iface" "$config" || tc qdisc replace dev $iface root ${qdisc:-fq} > /dev/null 2>&1
 	fi
 	if [ "$(uci -q get openmptcprouter.settings.disable_ipv6)" != "1" ] && [ "$config" != "omr6in4" ]; then
 		# IPv6 Updates:
@@ -417,6 +556,8 @@ interface_multipath_settings() {
 			[ -z "$gateway6" ] && gateway6=$(ip -6 r list dev $iface | grep -v default | awk '/proto static/ {print $1; exit}' | tr -d "\n")
 			[ -z "$gateway6" ] && gateway6=$(uci -q get "network.$config.ip6gw")
 			[ -z "$gateway6" ] && gateway6=$(ubus call network.interface.$config status | jsonfilter -q -l 1 -e '@.inactive.route[@.target="::"].nexthop' | tr -d "\n")
+			[ -z "$gateway6" ] && gateway6=$(ubus call network.interface.${config}_6 status 2>/dev/null | jsonfilter -q -l 1 -e '@.inactive.route[@.target="::"].nexthop' | tr -d "\n")
+			[ -z "$gateway6" ] && gateway6=$(ubus call network.interface.${config}_6 status 2>/dev/null | jsonfilter -q -l 1 -e '@.route[@.target="::"].nexthop' | tr -d "\n")
 			#if [ -z "$gateway6" ] || [ "$( valid_subnet6 $gateway6 )" != "ok" ]; then 
 			#	gateway6=$(ubus call network.interface.$config status | jsonfilter -q -l 1 -e '@.route[@.target="::"].nexthop' | tr -d "\n")
 			#fi
@@ -493,15 +634,29 @@ interface_multipath_settings() {
 	fi
 
 	if [ "$(uci -q get openmptcprouter.settings.force_multipath)" != "0" ] && [ -n "$(ip a show dev $iface | grep inet)" ]; then
-		if ([ "$mode" = "master" ] || [ "$mode" = "on" ]) && [ -z "$(multipath $iface | grep default)" ]; then
+		local tracker_state
+		tracker_state="$(uci -q get openmptcprouter.${config}.state)"
+		if [ "$tracker_state" = "down" ] && [ -n "$mode" ] && [ "$mode" != "off" ]; then
+			# omr-tracker still considers this interface down: it only flips state
+			# to "up" once its recovery counter (tries_up) is satisfied, and
+			# post-tracking's 002-error has already taken the endpoint out of
+			# MPTCP. This reload comes from netifd's own ifup/ifupdate/link-up
+			# event, which knows nothing about that check, so leave the endpoint
+			# alone instead of putting the interface back into MPTCP: adding it
+			# back - even as backup - makes the kernel keep opening subflows over
+			# a link OMR knows is dead, and on a flapping modem that re-add ran on
+			# every ifup (discussion #4368). 003-up adds the endpoint back in the
+			# configured mode as soon as the recovery is confirmed (issue #4355).
+			logger -t "MPTCP" "$iface tracker state is down, not adding it to MPTCP ($(multipath $iface))"
+		elif ([ "$mode" = "master" ] || [ "$mode" = "on" ]) && [ -z "$(multipath $iface | grep default)" ]; then
 			logger -t "MPTCP" "Set $iface to $mode from $(multipath $iface)"
-			multipath "$iface" "on"
+			multipath "$iface" "on" "$id"
 		elif ([ "$mode" = "off" ] || [ -z "$mode" ]) && [ -z "$(multipath $iface | grep deactivated)" ]; then
 			logger -t "MPTCP" "Set $iface to $mode from $(multipath $iface)"
-			multipath "$iface" "$mode"
+			multipath "$iface" "$mode" "$id"
 		elif [ "$mode" = "backup" ] && [ -z "$(multipath $iface | grep backup)" ]; then
 			logger -t "MPTCP" "Set $iface to $mode from $(multipath $iface)"
-			multipath "$iface" "$mode"
+			multipath "$iface" "$mode" "$id"
 		fi
 	fi
 
@@ -661,6 +816,13 @@ start_service() {
 		ethtool -K eth0 rx off tx off > /dev/null 2>&1
 		ethtool -K eth1 rx off tx off > /dev/null 2>&1
 	;; esac
+}
+
+stop_service() {
+	local pin_dir="/sys/fs/bpf/mptcp"
+	for pin in "$pin_dir"/*; do
+		[ -e "$pin" ] && bpftool struct_ops unregister pinned "$pin" >/dev/null 2>&1 && rm -f "$pin"
+	done
 }
 
 reload_service() {

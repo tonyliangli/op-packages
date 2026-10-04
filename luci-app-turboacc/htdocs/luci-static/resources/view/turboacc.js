@@ -182,7 +182,8 @@ return view.extend({
 
 		if (features.hasMTKWEDWO) {
 			o = s.option(form.Flag, 'fastpath_mh_eth_hnat_wed', _('MTK WED WO offloading'),
-				_('Requires hardware support, implemented at least for Filogic 8x0'));
+				_('Requires hardware support, implemented at least for Filogic 8x0') + ' ' +
+				_('Takes effect after rebooting the router.'));
 			o.default = o.disabled;
 			o.rmempty = false;
 			o.depends({ 'fastpath': 'flow_offloading', 'fastpath_fo_hw': '1' });
@@ -193,7 +194,7 @@ return view.extend({
 		o.value('0', _('Disable'))
 		if (features.hasXTFULLCONENAT || features.hasNFTFULLCONENAT) {
 			o.value('1', _('FULLCONENAT'));
-			o.value('2', _('Boardcom Fullcone NAT1'));
+			o.value('2', _('Broadcom Fullcone NAT1'));
 		}
 		o.default = '0';
 		o.rmempty = false;

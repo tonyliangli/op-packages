@@ -98,6 +98,7 @@ start_service()
 	#start app
 	procd_open_instance
 	procd_set_param command $pgyvpn_filename $cmd_arg
+	procd_set_param env LD_LIBRARY_PATH=/usr/lib/pgyvpn
 	[ -n "$username" ] && procd_append_param command --sn "$username"
 	[ -n "$password" ] && procd_append_param command --pwd "$password"
 	procd_set_param respawn
@@ -147,10 +148,6 @@ stop_service()
 	config_load pgyvpn
 	config_get oraysl_statusfilename oraysl statusfilename '/tmp/oray/pgyvpn_oraysl/status'
 	rm oraysl_statusfilename 2> /dev/null #delete oraysl status file
-}
-
-reload_service() {
-	restart
 }
 
 service_triggers() {

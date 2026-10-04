@@ -371,6 +371,9 @@ return view.extend({
 		so = ss.option(form.DummyValue, '_asn_version', _('ASN version'));
 		so.cfgvalue = function() { return renderResVersion.call(this, null, 'asn') };
 
+		so = ss.option(form.DummyValue, '_bundlemrs_version', _('BundleMRS version'));
+		so.cfgvalue = function() { return renderResVersion.call(this, null, 'bundlemrs') };
+
 		so = ss.option(form.DummyValue, '_china_ip4_version', _('China IPv4 list version'));
 		so.cfgvalue = function() { return renderResVersion.call(this, null, 'china_ip4') };
 
@@ -382,6 +385,24 @@ return view.extend({
 
 		so = ss.option(form.DummyValue, '_china_list_version', _('China list version'));
 		so.cfgvalue = function() { return renderResVersion.call(this, null, 'china_list') };
+
+		so = ss.option(form.Value, 'github_token', _('GitHub token'));
+		so.password = true;
+		so.renderWidget = function(/* ... */) {
+			let node = form.Value.prototype.renderWidget.apply(this, arguments);
+
+			(node.querySelector('.control-group') || node).appendChild(E('button', {
+				class: 'cbi-button cbi-button-apply',
+				title: _('Save'),
+				click: ui.createHandlerFn(this, () => {
+					return this.map.save(null, true).then(() => {
+						ui.changes.apply(true);
+					});
+				}, this.option)
+			}, [ _('Save') ]));
+
+			return node;
+		}
 		/* Overview END */
 
 		/* General START */
@@ -491,12 +512,13 @@ return view.extend({
 
 		so = ss.option(form.RichListValue, 'tun_stack', _('Stack'),
 			_('Tun stack.'));
-		so.value('system', _('System'), _('Less compatibility and sometimes better performance.'));
+		so.value('mips', _('mihomo IP stack (MIPS)'));
 		if (features.with_gvisor) {
 			so.value('gvisor', _('gVisor'), _('Based on google/gvisor.'));
 			so.value('mixed', _('Mixed'), _('Mixed <code>system</code> TCP stack and <code>gVisor</code> UDP stack.'));
 		}
-		so.default = 'system';
+		so.value('system', _('System'), _('Less compatibility and sometimes better performance.'));
+		so.default = 'mips';
 		so.rmempty = false;
 
 		so = ss.option(form.Value, 'tun_mtu', _('MTU'));
@@ -523,6 +545,13 @@ return view.extend({
 		so = ss.option(form.Flag, 'tun_disable_icmp_forwarding', _('Disable ICMP Forwarding'),
 			_('Prevent ICMP loopback issues in some cases. Ping will not show real delay.'));
 		so.default = so.enabled;
+
+		so = ss.option(form.ListValue, 'tun_congestion_controller', _('Congestion controller'));
+		so.default = hm.ipstack_congestion_controller[0][0];
+		hm.ipstack_congestion_controller.forEach((res) => {
+			so.value.apply(so, res);
+		})
+		so.depends('tun_stack', 'mips');
 		/* Inbound END */
 
 		/* TLS START */
@@ -626,6 +655,9 @@ return view.extend({
 			_('Allow access from private network.</br>' +
 			'To access the API on a private network from a public website, it must be enabled.'));
 		so.default = so.enabled;
+
+		so = ss.option(form.Value, 'external_controller_routing_mark', _('API routing mark (Fwmark)'));
+		so.datatype = 'uinteger';
 
 		so = ss.option(form.Value, 'external_controller_port', _('API HTTP port'));
 		so.datatype = 'port';
@@ -799,7 +831,7 @@ return view.extend({
 			_('As the TOP upstream of dnsmasq.'));
 		so.default = so.disabled;
 		so.validate = function(section_id, value) {
-			let desc = this.getUIElement(section_id).node.nextSibling;
+			const desc = this.getUIElement(section_id).node.nextSibling;
 			value = this.formvalue(section_id);
 
 			if (value == 1)

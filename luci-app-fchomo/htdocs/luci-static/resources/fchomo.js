@@ -2,10 +2,36 @@
 'require baseclass';
 'require form';
 'require fs';
+'require dom';
 'require rpc';
 'require uci';
 'require ui';
 'require validation';
+
+function funcSed(originFunc, matrix = [], closure = []) {
+	if (isEmpty(matrix))
+		return originFunc;
+
+	const oriFuncStr = originFunc.toString();
+	let funcStr = oriFuncStr;
+
+	for (const [regexp, replacer] of matrix) {
+		if (!regexp)
+			continue;
+		if (regexp.test(funcStr))
+			funcStr = funcStr.replace(regexp, replacer || '');
+		else
+			throw new Error(`funcSed: No matching items found: ${regexp}`);
+	}
+
+	if (isEmpty(funcStr) || funcStr === oriFuncStr)
+		return originFunc;
+
+	const funcArgs = funcStr.substring(funcStr.indexOf('(') +1, funcStr.indexOf(')')).split(',');
+	const funcBody = funcStr.substring(funcStr.indexOf('{') +1, funcStr.lastIndexOf('}'));
+
+	return new Function(...closure, ...funcArgs, funcBody);
+}
 
 /* Member */
 const rulesetdoc = [
@@ -53,6 +79,14 @@ const congestion_controller = [
 	['cubic', _('cubic')],
 	['new_reno', _('new_reno')],
 	['bbr', _('bbr')],
+];
+
+const ipstack_congestion_controller = [
+	['', _('Keep default')],
+	['cubic', _('cubic')],
+	['reno', _('reno')],
+	['bbr', _('bbr')],
+	['bbr3', _('bbr3')],
 ];
 
 const bbr_profiles = [
@@ -118,7 +152,7 @@ const glossary = {
 		prefmt: '%s_nodedomain',
 		field: 'proxy-server-nameserver-policy',
 	},
-	node: {
+	node: { // outbound
 		prefmt: 'node_%s',
 		field: 'proxies',
 	},
@@ -156,12 +190,15 @@ const inbound_type = [
 	['shadowsocks', _('Shadowsocks') + ' - ' + _('TCP/UDP')],
 	['mieru', _('Mieru') + ' - ' + _('TCP/UDP')],
 	['sudoku', _('Sudoku') + ' - ' + _('TCP')],
+	['snell', _('Snell') + ' - ' + _('TCP')],
 	['vmess', _('VMess') + ' - ' + _('TCP')],
 	['vless', _('VLESS') + ' - ' + _('TCP')],
 	['trojan', _('Trojan') + ' - ' + _('TCP')],
 	['anytls', _('AnyTLS') + ' - ' + _('TCP')],
 	['tuic', _('TUIC') + ' - ' + _('UDP')],
 	['hysteria2', _('Hysteria2') + ' - ' + _('UDP')],
+	['hysteria2-realm', _('Hysteria2 Realm Server') + ' - ' + _('TCP/UDP')],
+	['shadowquic', _('ShadowQUIC') + ' - ' + _('UDP')],
 	['trusttunnel', _('TrustTunnel') + ' - ' + _('TCP/UDP')],
 	['tunnel', _('Tunnel') + ' - ' + _('TCP/UDP')]
 ];
@@ -182,6 +219,7 @@ const load_balance_strategy = [
 ];
 
 const outbound_type = [
+	['rematch', _('Rematch'), _('Rematching routing rules')],
 	['direct', _('DIRECT') + ' - ' + _('TCP/UDP')],
 	['http', _('HTTP') + ' - ' + _('TCP')],
 	['socks5', _('SOCKS5') + ' - ' + _('TCP/UDP')],
@@ -194,23 +232,36 @@ const outbound_type = [
 	['vless', _('VLESS') + ' - ' + _('TCP')],
 	['trojan', _('Trojan') + ' - ' + _('TCP')],
 	['anytls', _('AnyTLS') + ' - ' + _('TCP')],
+	['tuic', _('TUIC') + ' - ' + _('UDP')],
 	//['hysteria', _('Hysteria') + ' - ' + _('UDP')],
 	['hysteria2', _('Hysteria2') + ' - ' + _('UDP')],
-	['tuic', _('TUIC') + ' - ' + _('UDP')],
-	['masque', _('Masque') + ' - ' + _('UDP')], // https://blog.cloudflare.com/post-quantum-warp/
+	['shadowquic', _('ShadowQUIC') + ' - ' + _('UDP')],
 	['trusttunnel', _('TrustTunnel') + ' - ' + _('TCP/UDP')],
-	['wireguard', _('WireGuard') + ' - ' + _('UDP')],
+	['zerotier', _('ZeroTier') + ' - ' + _('UDP') + ' - ' + _('L2')], // Endpoint
+	['wireguard', _('WireGuard') + ' - ' + _('UDP')], // Endpoint
+	['tailscale', _('Tailscale') + ' - ' + _('UDP')], // Endpoint
+	['masque', _('Masque') + ' - ' + _('UDP')], // Endpoint // https://blog.cloudflare.com/post-quantum-warp/
+	['easytier', _('EasyTier') + ' - ' + _('TCP/UDP')], // Endpoint
 	['ssh', _('SSH') + ' - ' + _('TCP')]
 ];
 
 const preset_outbound = {
 	full: [
+		['DIRECT'],      // built-in Outbound
+		['REJECT'],      // built-in Outbound
+		['REJECT-DROP'], // built-in Outbound
+		['PASS'],        // built-in Outbound
+		['PASS-RULE'],   // built-in Outbound
+		['COMPATIBLE'],  // built-in Outbound
+		['GLOBAL']       // built-in Proxy Group
+	],
+	proxy: [ // built-in Outbound
 		['DIRECT'],
 		['REJECT'],
 		['REJECT-DROP'],
 		['PASS'],
-		['COMPATIBLE'],
-		['GLOBAL']
+		['PASS-RULE'],
+		['COMPATIBLE']
 	],
 	direct: [
 		['', _('null')],
@@ -229,7 +280,6 @@ const proxy_group_type = [
 	['fallback', _('Fallback')],
 	['url-test', _('URL test')],
 	['load-balance', _('Load balance')],
-	//['relay', _('Relay')], // Deprecated
 ];
 
 const routing_port_type = [
@@ -270,6 +320,7 @@ const rules_type = [
 	//['IN-TYPE'],
 	//['IN-USER'],
 	//['IN-NAME'],
+	['REMATCH-NAME'],
 
 	['PROCESS-PATH'],
 	['PROCESS-PATH-REGEX'],
@@ -289,7 +340,7 @@ const rules_type = [
 
 const rules_type_allowparms = [
 	// params only available for types other than
-	// https://github.com/muink/mihomo/blob/300eb8b12a75504c4bd4a6037d2f6503fd3b347f/rules/parser.go#L12
+	// https://github.com/muink/mihomo/blob/ea19cda0c9b666aa0fc1b0412ae6fbc0ea9d44e0/rules/parser.go#L12
 	'GEOIP',
 	'IP-ASN',
 	'IP-CIDR',
@@ -479,6 +530,23 @@ const CBIDynamicList = form.DynamicList.extend({ // @less_25_12
 		});
 
 		return widget.render();
+	}
+});
+
+const CBIMultiValue = form.MultiValue.extend({ // @pr8758_merged
+	__name__: 'CBI.MultiValue',
+
+	renderWidget(/* ... */) {
+		const sb = funcSed(
+			form.MultiValue.prototype.renderWidget,
+			[
+				[new RegExp(/(widget\s*=\s*new)\s*ui\.Dropdown/), '$1 UIDropdown'],
+				[new RegExp(/(multiple:\s*true)/), 'keep_order: this.keep_order, $1']
+			],
+			['UIDropdown']
+		).call(this, UIDropdown, ...arguments);
+
+		return sb;
 	}
 });
 
@@ -773,6 +841,94 @@ const UIDynamicList = ui.DynamicList.extend({ // @less_25_12
 	}
 });
 
+// keep selected order for multiple selection
+const UIDropdown = ui.Dropdown.extend({ // @pr8758_merged
+	__init__(value, choices, options) {
+		const result = ui.Dropdown.prototype.__init__.apply(this, arguments);
+
+		this.orderCounter = this.values.length;
+		this.options.keep_order = options?.keep_order ?? false;
+
+		return result;
+	},
+
+	render(/* ... */) {
+		const sb = funcSed(
+			ui.Dropdown.prototype.render,
+			[
+				[new RegExp(/('multiple':[^\n]*this\.options\.multiple)/), `'keep_order': this.options.keep_order ? '' : null, $1`]
+			],
+			['dom']
+		).call(this, dom, ...arguments);
+
+		return sb;
+	},
+
+	bind(/* ... */) {
+		const sb = funcSed(
+			ui.Dropdown.prototype.bind,
+			[
+				[new RegExp(/(o\.multiple\s*=)/), `o.keep_order = sb.hasAttribute('keep_order'); $1`],
+				[
+					new RegExp(/(if\s*\(items\[i\]\.hasAttribute\('selected'\)\s*&&\s*ndisplay--\s*>\s*0\)[\n\s]*items\[i\]\.setAttribute\('display',\s*n\+\+\);)/),
+					`$1
+					if (this.options.keep_order) {
+						const value = items[i].getAttribute('data-value');
+						if (items[i].hasAttribute('selected') && this.values.includes(value))
+							items[i].setAttribute('data-order', this.values.indexOf(value));
+					}`
+				]
+			],
+			['dom']
+		).call(this, dom, ...arguments);
+
+		return sb;
+	},
+
+	toggleItem(/* ... */) {
+		const result = funcSed(
+			ui.Dropdown.prototype.toggleItem,
+			[
+				[
+					new RegExp(/(li\.removeAttribute\('selected'\))/),
+					`if (this.options.keep_order)
+						li.removeAttribute('data-order');
+					$1`
+				],
+				[
+					new RegExp(/(li\.setAttribute\('selected',\s*''\))/),
+					`if (this.options.keep_order)
+						li.setAttribute('data-order', this.orderCounter++);
+					$1`
+				]
+			],
+			['dom']
+		).call(this, dom, ...arguments);
+
+		return result;
+	},
+
+	saveValues(/* ... */) {
+		const result = funcSed(
+			ui.Dropdown.prototype.saveValues,
+			[
+				[
+					new RegExp(/(const sel\s*=)([^;\n]+);/),
+					`$1 Array.from($2);
+					if (this.options.keep_order) {
+						sel.sort((a, b) =>
+							(+a.getAttribute('data-order') || 0) -
+							(+b.getAttribute('data-order') || 0)
+						);
+					}`
+				]
+			]
+		).call(this, ...arguments);
+
+		return result;
+	}
+});
+
 /* Method */
 /* thanks to homeproxy */
 function calcStringMD5(e) {
@@ -1005,6 +1161,16 @@ function yaml2json(content, command) {
 
 	return callYaml2Json(content, command).then(res => res.result);
 }
+function yamlfile2json(type, filename, command) {
+	const callYamlfile2Json = rpc.declare({
+		object: 'luci.fchomo',
+		method: 'yamlfile2json',
+		params: ['type', 'filename', 'command'],
+		expect: { '': {} }
+	});
+
+	return callYamlfile2Json(type, filename, command).then(res => res.result);
+}
 
 function isEmpty(res) {
 	if (res == null) return true;                                                // null, undefined
@@ -1101,84 +1267,68 @@ function loadModalTitle(title, addtitle, section_id) {
 	return label ? title + ' » ' + label : addtitle;
 }
 
-function loadProxyGroupLabel(preadds, section_id) {
+function loadLabel(preadds, section_id) {
 	delete this.keylist;
 	delete this.vallist;
 
-	preadds?.forEach((arr) => {
-		this.value.apply(this, arr);
-	});
-	uci.sections(this.config, 'proxy_group', (res) => {
-		if (res.enabled !== '0')
-			this.value(res['.name'], res.label);
-	});
+	for (const arr of preadds || [])
+		this.value(...arr);
 
 	return this.super('load', section_id);
 }
 
-function loadNodeLabel(preadds, section_id) {
-	delete this.keylist;
-	delete this.vallist;
+function loadLabelValues(uciconfig, sectiontype, options = {}) {
+	const values = [];
 
-	preadds?.forEach((arr) => {
-		this.value.apply(this, arr);
-	});
-	uci.sections(this.config, 'node', (res) => {
-		if (res.enabled !== '0')
-			this.value(res['.name'], res.label);
-	});
+	switch (sectiontype) {
+		case 'proxy_group':
+		case 'node':
+		case 'provider':
+			uci.sections(uciconfig, sectiontype, (res) => {
+				if (res.enabled !== '0')
+					values.push([res['.name'], res.label]);
+			});
+			break;
+		case 'ruleset':
+			uci.sections(uciconfig, sectiontype, (res) => {
+				if (
+					res.enabled !== '0' &&
+					(!options.behaviors ||
+					  options.behaviors.includes(res.behavior))
+				) {
+					values.push([res['.name'], res.label]);
+				}
+			});
+			break;
+		case 'subrule-group': {
+			const groups = new Set();
 
-	return this.super('load', section_id);
-}
+			uci.sections(uciconfig, 'subrules', (res) => {
+				if (res.enabled !== '0')
+					groups.add(res.group);
+			});
 
-function loadProviderLabel(preadds, section_id) {
-	delete this.keylist;
-	delete this.vallist;
+			for (const group of groups)
+				values.push([group, group]);
+			break;
+		}
+		case 'rematch-name': {
+			const names = new Set();
 
-	preadds?.forEach((arr) => {
-		this.value.apply(this, arr);
-	});
-	uci.sections(this.config, 'provider', (res) => {
-		if (res.enabled !== '0')
-			this.value(res['.name'], res.label);
-	});
+			uci.sections(uciconfig, 'node', (res) => {
+				if (res.enabled !== '0' && res.target_rematch_name)
+					names.add(res.target_rematch_name);
+			});
 
-	return this.super('load', section_id);
-}
+			for (const name of names)
+				values.push([name, name]);
+			break;
+		}
+		default:
+			break;
+	}
 
-function loadRulesetLabel(preadds, behaviors, section_id) {
-	delete this.keylist;
-	delete this.vallist;
-
-	preadds?.forEach((arr) => {
-		this.value.apply(this, arr);
-	});
-	uci.sections(this.config, 'ruleset', (res) => {
-		if (res.enabled !== '0')
-			if (behaviors ? behaviors.includes(res.behavior) : true)
-				this.value(res['.name'], res.label);
-	});
-
-	return this.super('load', section_id);
-}
-
-function loadSubRuleGroup(preadds, section_id) {
-	delete this.keylist;
-	delete this.vallist;
-
-	preadds?.forEach((arr) => {
-		this.value.apply(this, arr);
-	});
-	let groups = {};
-	uci.sections(this.config, 'subrules', (res) => {
-		if (res.enabled !== '0')
-			groups[res.group] = res.group;
-	});
-	Object.keys(groups).forEach((group) => {
-		this.value(group, group);
-	});
-
-	return this.super('load', section_id);
+	return values;
 }
 
 function renderStatus(ElId, isRunning, instance, noGlobal) {
@@ -1242,6 +1392,8 @@ function renderResDownload(section_id) {
 				if (type === 'http') {
 					return downloadFile(section_type, section_id, url, header).then((res) => {
 						ui.addNotification(null, E('p', _('Download successful.')), 'info');
+						if (this.callback)
+							this.callback(section_type, section_id);
 					}).catch((e) => {
 						ui.addNotification(null, E('p', _('Download failed: %s').format(e)), 'error');
 					});
@@ -1249,6 +1401,28 @@ function renderResDownload(section_id) {
 					return ui.addNotification(null, E('p', _('Unable to download unsupported type: %s').format(type)), 'error');
 			}, section_type, section_id, type, url, header)
 		}, [ _('🡇') ]) //🗘
+	]);
+
+	return El;
+}
+
+function renderResLink(section_id) {
+	const section_type = this.section.sectiontype;
+	const type = uci.get(this.config, section_id, 'type');
+
+	let El = E([
+		E('span', {
+			title: this.readonly ? this.readonly : null
+		}, [
+			E('button', {
+				class: 'cbi-button cbi-button-apply',
+				disabled: (this.readonly !== false || type === 'inline') || null,
+				click: ui.createHandlerFn(this, (section_type, section_id) => {
+					let path = encodeURIComponent(`${HM_DIR.replace(/^\//, '')}/${section_type}`);
+					return window.open(`${window.location.origin}/tinyfilemanager/index.php?p=${path}&view=${section_id}`, '_blank', 'noopener');
+				}, section_type, section_id)
+			}, [ _('🔗') ])
+		])
 	]);
 
 	return El;
@@ -1374,7 +1548,7 @@ function textvalue2Value(section_id) {
 	let cval = this.cfgvalue(section_id);
 	let i = this.keylist.indexOf(cval);
 
-	return this.vallist[i];
+	return this.vallist[i] ?? cval;
 }
 
 function validateAuth(section_id, value) {
@@ -1428,7 +1602,7 @@ function validateCommonPort(section_id, value) {
 	for (let custom of arr) {
 		if (!routing_port_type.map(e => e[0]).includes(custom)) {
 			let ports = [];
-			for (let i of custom.split(',')) {
+			for (let i of custom.split(this.hm_separator ?? ',')) {
 				if (!stubValidator.apply('port', i) && !stubValidator.apply('portrange', i))
 					return _('Expecting: %s').format(_('valid port value'));
 				if (ports.includes(i))
@@ -1497,6 +1671,18 @@ function validateUrl(section_id, value) {
 	catch(e) {
 		return _('Expecting: %s').format(_('valid URL'));
 	}
+
+	return true;
+}
+
+function validateHexstr(length, section_id, value) {
+	if (!value)
+		return true;
+
+	length /= 4; // Convert bits to hex characters
+	const regexp = new RegExp(`^[0-9a-fA-F]{${length}}$`);
+	if (!value.match(regexp))
+		return _('Expecting: %s').format(_('valid hex string with %d characters').format(length));
 
 	return true;
 }
@@ -1608,15 +1794,15 @@ function lsDir(type) {
 	});
 }
 
-function readFile(type, filename) {
+function readFile(type, filename, isbinary) {
 	const callReadFile = rpc.declare({
 		object: 'luci.fchomo',
 		method: 'file_read',
-		params: ['type', 'filename'],
+		params: ['type', 'filename', 'isbinary'],
 		expect: { '': {} }
 	});
 
-	return L.resolveDefault(callReadFile(type, filename), {}).then((res) => {
+	return L.resolveDefault(callReadFile(type, filename, isbinary), {}).then((res) => {
 		if (res.content ?? true) {
 			return res.content;
 		} else
@@ -1624,15 +1810,15 @@ function readFile(type, filename) {
 	});
 }
 
-function writeFile(type, filename, content) {
+function writeFile(type, filename, content, isbinary) {
 	const callWriteFile = rpc.declare({
 		object: 'luci.fchomo',
 		method: 'file_write',
-		params: ['type', 'filename', 'content'],
+		params: ['type', 'filename', 'content', 'isbinary'],
 		expect: { '': {} }
 	});
 
-	return L.resolveDefault(callWriteFile(type, filename, content), {}).then((res) => {
+	return L.resolveDefault(callWriteFile(type, filename, content, isbinary), {}).then((res) => {
 		if (res.result) {
 			return res.result;
 		} else
@@ -1722,6 +1908,7 @@ return baseclass.extend({
 	monospacefonts,
 	checkurls,
 	congestion_controller,
+	ipstack_congestion_controller,
 	bbr_profiles,
 	stunserver,
 	dashrepos,
@@ -1752,6 +1939,7 @@ return baseclass.extend({
 	/* Prototype */
 	GridSection: CBIGridSection,
 	DynamicList: CBIDynamicList,
+	MultiValue: CBIMultiValue,
 	StaticList: CBIStaticList,
 	ListValue: CBIListValue,
 	RichValue: CBIRichValue,
@@ -1772,6 +1960,7 @@ return baseclass.extend({
 	shuffle,
 	json2yaml,
 	yaml2json,
+	yamlfile2json,
 	isEmpty,
 	removeBlankAttrs,
 	toUciname,
@@ -1781,16 +1970,14 @@ return baseclass.extend({
 	// load
 	loadDefaultLabel,
 	loadModalTitle,
-	loadProxyGroupLabel,
-	loadNodeLabel,
-	loadProviderLabel,
-	loadRulesetLabel,
-	loadSubRuleGroup,
+	loadLabel,
+	loadLabelValues,
 	// render
 	renderStatus,
 	updateStatus,
 	getDashURL,
 	renderResDownload,
+	renderResLink,
 	handleGenKey,
 	handleReload,
 	handleRemoveIdles,
@@ -1806,6 +1993,7 @@ return baseclass.extend({
 	validateUUID,
 	validateUrl,
 	// validate with bind this
+	validateHexstr,
 	validateBase64Key,
 	validateMTLSClientAuth,
 	validatePresetIDs,

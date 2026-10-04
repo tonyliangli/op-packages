@@ -12,6 +12,7 @@ export const PRESET_OUTBOUND = [
 	'REJECT',
 	'REJECT-DROP',
 	'PASS',
+	'PASS-RULE',
 	'COMPATIBLE',
 	'GLOBAL'
 ];
@@ -84,7 +85,7 @@ export function yqRead(flags, command, content) {
 };
 
 export function yqReadFile(flags, command, filepath) {
-	const out = executeCommand(null, 'yq', flags, shellQuote(command), filepath);
+	const out = executeCommand(null, 'yq', flags, shellQuote(command), shellQuote(filepath));
 
 	return out.stdout;
 };
@@ -115,14 +116,20 @@ export function bytesizeToByte(str) {
 	let bytes = 0;
 	let arr = match(str, /^(\d+)(k|m|g)?b?$/);
 	if (arr) {
-		if (arr[2] === 'k') {
-			bytes = strToInt(arr[1]) * 1024;
-		} else if (arr[2] === 'm') {
-			bytes = strToInt(arr[1]) * 1048576;
-		} else if (arr[2] === 'g') {
-			bytes = strToInt(arr[1]) * 1073741824;
-		} else
-			bytes = strToInt(arr[1]);
+		switch (arr[2]) {
+			case 'k':
+				bytes = strToInt(arr[1]) * 1024;
+				break;
+			case 'm':
+				bytes = strToInt(arr[1]) * 1048576;
+				break;
+			case 'g':
+				bytes = strToInt(arr[1]) * 1073741824;
+				break;
+			default:
+				bytes = strToInt(arr[1]);
+				break;
+		}
 	}
 
 	return bytes;
@@ -134,16 +141,23 @@ export function durationToSecond(str) {
 	let seconds = 0;
 	let arr = match(str, /^(\d+)(s|m|h|d)?$/);
 	if (arr) {
-		if (arr[2] === 's') {
-			seconds = strToInt(arr[1]);
-		} else if (arr[2] === 'm') {
-			seconds = strToInt(arr[1]) * 60;
-		} else if (arr[2] === 'h') {
-			seconds = strToInt(arr[1]) * 3600;
-		} else if (arr[2] === 'd') {
-			seconds = strToInt(arr[1]) * 86400;
-		} else
-			seconds = strToInt(arr[1]);
+		switch (arr[2]) {
+			case 's':
+				seconds = strToInt(arr[1]);
+				break;
+			case 'm':
+				seconds = strToInt(arr[1]) * 60;
+				break;
+			case 'h':
+				seconds = strToInt(arr[1]) * 3600;
+				break;
+			case 'd':
+				seconds = strToInt(arr[1]) * 86400;
+				break;
+			default:
+				seconds = strToInt(arr[1]);
+				break;
+		}
 	}
 
 	return seconds;
@@ -210,22 +224,21 @@ export function parseVlessEncryption(payload, side) {
 		(isEmpty(content.keypairs) ? '' : '.' + join('.', map(content.keypairs, e => e[side]))); // Required
 };
 
-export function parseListener(cfg, isClient, label) {
+export function parseListener(cfg) {
 	return {
 		name: cfg['.name'],
 		type: cfg.type,
 
 		listen: cfg.listen || '::',
-		port: cfg.port,
-		...(isClient ? {
-			rule: cfg.rule,
-			proxy: label,
-		} : {}),
+		port: strToInt(cfg.listen_port),
+		"routing-mark": strToInt(cfg.routing_mark) || null,
+		rule: cfg.rule,
+		proxy: cfg.proxy, // raw data need post-processing
 
-		/* HTTP / SOCKS / VMess / VLESS / Trojan / AnyTLS / Tuic / Hysteria2 */
+		/* HTTP / SOCKS / Mieru / VMess / VLESS / Trojan / AnyTLS / Tuic / Hysteria2 / TrustTunnel */
 		users: (cfg.type in ['http', 'socks', 'mixed', 'vmess', 'vless', 'trojan', 'trusttunnel']) ? [
 			(cfg.username || cfg.vmess_uuid) ? {
-				/* HTTP / SOCKS */
+				/* HTTP / SOCKS / Trojan / TrustTunnel */
 				username: cfg.username,
 				password: cfg.password,
 
@@ -243,14 +256,6 @@ export function parseListener(cfg, isClient, label) {
 			/* Tuic */
 			...arrToObj([[cfg.uuid, cfg.password]])
 		} : null),
-
-		/* Hysteria2 */
-		up: strToInt(cfg.hysteria_up_mbps),
-		down: strToInt(cfg.hysteria_down_mbps),
-		"ignore-client-bandwidth": strToBool(cfg.hysteria_ignore_client_bandwidth),
-		obfs: cfg.hysteria_obfs_type,
-		"obfs-password": cfg.hysteria_obfs_password,
-		masquerade: cfg.hysteria_masquerade,
 
 		/* Shadowsocks */
 		cipher: cfg.shadowsocks_chipher,
@@ -279,10 +284,12 @@ export function parseListener(cfg, isClient, label) {
 		} : {}),
 		fallback: (cfg.sudoku_http_mask === '0') ? null : cfg.sudoku_fallback,
 
-		/* Tuic */
-		"max-idle-time": durationToSecond(cfg.tuic_max_idle_time),
-		"authentication-timeout": durationToSecond(cfg.tuic_authentication_timeout),
-		"max-udp-relay-packet-size": strToInt(cfg.tuic_max_udp_relay_packet_size),
+		/* Snell */
+		psk: cfg.snell_psk,
+		version: cfg.snell_version,
+
+		/* VMess / VLESS */
+		decryption: cfg.vless_decryption === '1' ? parseVlessEncryption(cfg.vless_encryption_hmpayload, 'server') : null,
 
 		/* Trojan */
 		"ss-option": cfg.trojan_ss_enabled === '1' ? {
@@ -294,47 +301,155 @@ export function parseListener(cfg, isClient, label) {
 		/* AnyTLS */
 		"padding-scheme": cfg.anytls_padding_scheme,
 
-		/* VMess / VLESS */
-		decryption: cfg.vless_decryption === '1' ? parseVlessEncryption(cfg.vless_encryption_hmpayload, 'server') : null,
+		/* Tuic */
+		"authentication-timeout": durationToSecond(cfg.tuic_authentication_timeout),
+		"max-udp-relay-packet-size": strToInt(cfg.tuic_max_udp_relay_packet_size),
+
+		/* Brutal */
+		up: strToInt(cfg.brutal_up_mbps),
+		down: strToInt(cfg.brutal_down_mbps),
+		"ignore-client-bandwidth": strToBool(cfg.brutal_ignore_client_bandwidth),
+
+		/* Hysteria2 */
+		obfs: cfg.hysteria_obfs_type,
+		"obfs-password": cfg.hysteria_obfs_password,
+		"obfs-min-packet-size": strToInt(cfg.hysteria_obfs_min_packet_size),
+		"obfs-max-packet-size": strToInt(cfg.hysteria_obfs_max_packet_size),
+		masquerade: cfg.hysteria_masquerade,
+		"realm-opts": cfg.hysteria2_realm === '1' ? {
+			enable: true,
+			"server-url": cfg.hysteria2_realm_server_url,
+			token: cfg.hysteria2_realm_token,
+			"realm-id": cfg.hysteria2_realm_id,
+			"stun-servers": cfg.hysteria2_realm_stun_servers,
+			// @TLS of server-url
+			//sni,
+			//alpn,
+			//"skip-cert-verify",
+			//fingerprint,
+			//certificate,
+			//"private-key"
+		} : null,
+
+		/* Hysteria2 Realmserver */
+		token: cfg.hysteria2_realmserver_token,
+		"max-realms": strToInt(cfg.hysteria2_realmserver_max_realms),
+		"max-realms-per-ip": strToInt(cfg.hysteria2_realmserver_max_realms_per_ip),
+		"trusted-proxy-header": cfg.hysteria2_realmserver_trusted_proxy_header,
+		"realm-name-pattern": cfg.hysteria2_realmserver_realm_name_pattern,
+
+		/* ShadowQUIC */
+		...(cfg.type === 'shadowquic' ? {
+			users: [
+				{
+					username: cfg.plugin_opts_thetlsusername,
+					password: cfg.plugin_opts_thetlspassword
+				}
+			]
+		} : {}),
+		"quic-versions": cfg.shadowquic_quic_versions,
+		"zero-rtt": strToBool(cfg.shadowquic_zero_rtt),
+		"jls-upstream": cfg.type === 'shadowquic' ? {
+			addr: cfg.plugin_opts_handshake_dest,
+			sni: cfg.plugin_opts_host,
+			proxy: cfg.plugin_opts_dest_proxy, // raw data need post-processing
+			"rate-limit": strToInt(cfg.plugin_opts_rate_limit)
+		} : null,
+		cwnd: strToInt(cfg.shadowquic_cwnd),
+		"max-datagram-frame-size": strToInt(cfg.shadowquic_max_datagram_frame_size),
+		"recv-window-conn": strToInt(cfg.shadowquic_recv_window_conn),
+		"recv-window": strToInt(cfg.shadowquic_recv_window),
+		"disable-mtu-discovery": cfg.shadowquic_mtu_discovery === '0' ? true : null,
+
+		/* TrustTunnel */
 
 		/* Tunnel */
 		target: cfg.tunnel_target,
 
-		/* Plugin fields */
-		...(cfg.plugin ? {
-			// shadow-tls
-			"shadow-tls": cfg.plugin === 'shadow-tls' ? {
-				enable: true,
-				version: strToInt(cfg.plugin_opts_shadowtls_version),
-				...(strToInt(cfg.plugin_opts_shadowtls_version) >= 3 ? {
-					users: [
-						{
-							name: 1,
-							password: cfg.plugin_opts_thetlspassword
-						}
-					],
-				} : { password: cfg.plugin_opts_thetlspassword }),
-				handshake: {
-					dest: cfg.plugin_opts_handshake_dest
-				},
-			} : null
-		} : {}),
-
 		/* Extra fields */
 		"congestion-controller": cfg.congestion_controller,
 		"bbr-profile": cfg.bbr_profile,
+		"max-idle-time": durationToSecond(cfg.max_idle_time),
+
 		network: cfg.network,
-		udp: strToBool(cfg.udp),
+		udp: cfg.udp === '0' ? false : true,
+
+		/* Plugin fields */
+		...(cfg.plugin === '1' ? (
+			cfg.plugin_type === 'obfs' ? (
+			// obfs-simple
+				cfg.type === 'snell' ? {
+					// snell
+					"obfs-opts": {
+						mode: cfg.plugin_opts_obfsmode,
+						host: cfg.plugin_opts_host
+					}
+				} : {
+					// shadowsocks
+					"simple-obfs": {
+						enable: true,
+						mode: cfg.plugin_opts_obfsmode
+					}
+				}
+			) : cfg.plugin_type === 'shadow-tls' ? {
+			// shadow-tls
+				"shadow-tls": {
+					enable: true,
+					version: strToInt(cfg.plugin_opts_shadowtls_version),
+					...(strToInt(cfg.plugin_opts_shadowtls_version) >= 3 ? {
+						users: [
+							{
+								name: 1,
+								password: cfg.plugin_opts_thetlspassword
+							}
+						],
+					} : { password: cfg.plugin_opts_thetlspassword }),
+					handshake: {
+						dest: cfg.plugin_opts_handshake_dest,
+						proxy: cfg.plugin_opts_dest_proxy // raw data need post-processing
+					}
+				}
+			} : cfg.plugin_type === 'restls' ? {
+			// restls
+				"res-tls": {
+					enable: true,
+					dest: cfg.plugin_opts_handshake_dest,
+					password: cfg.plugin_opts_thetlspassword,
+					"restls-script": cfg.plugin_opts_restls_script,
+					//"min-record-len": 0,
+					proxy: cfg.plugin_opts_dest_proxy, // raw data need post-processing
+					"rate-limit": strToInt(cfg.plugin_opts_rate_limit)
+				}
+			} : cfg.plugin_type === 'jls' ? {
+			// jls
+				"jls-config": {
+					enable: true,
+					users: [
+						{
+							username: cfg.plugin_opts_thetlsusername,
+							password: cfg.plugin_opts_thetlspassword
+						}
+					],
+					dest: cfg.plugin_opts_handshake_dest,
+					sni: cfg.plugin_opts_host,
+					alpn: cfg.tls_alpn,
+					proxy: cfg.plugin_opts_dest_proxy, // raw data need post-processing
+					"rate-limit": strToInt(cfg.plugin_opts_rate_limit)
+				}
+			} : {}
+		) : {}),
 
 		/* TLS fields */
-		...(cfg.tls === '1' ? {
-			alpn: cfg.tls_alpn,
+		...(cfg.allow_insecure === '1' ? { "allow-insecure": true } : cfg.tls === '1' ? {
+			alpn: cfg.plugin_type in ['jls'] ? null : cfg.tls_alpn,
 			...(cfg.tls_reality === '1' ? {
 				"reality-config": {
 					dest: cfg.tls_reality_dest,
 					"private-key": cfg.tls_reality_private_key,
 					"short-id": cfg.tls_reality_short_id,
-					"server-names": cfg.tls_reality_server_names
+					"server-names": cfg.tls_reality_server_names,
+					"max-time-difference": strToInt(cfg.tls_reality_max_time_difference),
+					proxy: cfg.plugin_opts_dest_proxy, // raw data need post-processing
 				}
 			} : {
 				certificate: cfg.tls_cert_path,
@@ -357,8 +472,19 @@ export function parseListener(cfg, isClient, label) {
 				"sc-max-buffered-posts": strToInt(cfg.transport_xhttp_sc_max_buffered_posts) || null,
 				"sc-stream-up-server-secs": cfg.transport_xhttp_sc_stream_up_server_secs,
 				"sc-max-each-post-bytes": strToInt(cfg.transport_xhttp_sc_max_each_post_bytes) || null,
+				// @其他的配置
 			} : null
-		} : {})
+		} : {}),
+
+		/* Multiplex fields */
+		"mux-option": cfg.smux_enabled === '1' ? {
+			padding: strToBool(cfg.smux_padding),
+			brutal: cfg.smux_brutal === '1' ? {
+				enabled: true,
+				up: strToInt(cfg.smux_brutal_up) || null, // Mbps
+				down: strToInt(cfg.smux_brutal_down) || null // Mbps
+			} : null
+		} : null
 	}
 };
 /* String universal end */
