@@ -75,68 +75,6 @@ const ensureLogPoll = hp.statusPoller({
 	}
 });
 
-/* --- rule-set download failures ------------------------------------------
- *
- * A remote rule-set that cannot be downloaded stops the service: sing-box
- * fetches it during initialization, before the inbounds bind, so a failure
- * there is a failed start.  That makes it a loud problem, and this block is
- * here to make it legible rather than to solve it - a start that failed leaves
- * no instance, so sing-box-c.log is the only place the reason is written down.
- *
- * sing-box-c.log is read rather than a new RPC: the ACL already grants the
- * browser read on that file for the log viewer below, so this costs no
- * permission and no new method to keep in step with the method table.
- *
- * The built-in China split is not among the rule-sets this can be about: those
- * are local files the resource updater maintains, generated from the same lists
- * the nft sets are rendered from, and there is nothing to download. */
-const ruleSetNode = E('div', { 'id': 'ruleset_status' },
-	E('img', {
-		'src': L.resource('icons/loading.svg'),
-		'alt': _('Loading'),
-		'style': 'vertical-align:middle'
-	}, _('Collecting data...'))
-);
-
-function renderRuleSetStatus() {
-	/* Same poller as the log views, so there is still one handler per view
-	 * no matter how often render() runs. */
-	ensureLogPoll();
-
-	fs.read_direct(`${hp_dir}/sing-box-c.log`, 'text')
-		.then((text) => {
-			const failures = hp.parseRuleSetFetchFailures(text);
-
-			if (!failures.length) {
-				dom.content(ruleSetNode, E('span', { 'style': 'color:green' },
-					[_('No rule-set download failures in the current log.')]));
-				return;
-			}
-
-			dom.content(ruleSetNode, E('div', [
-				E('p', { 'style': 'color:red' }, [
-					_('%d rule-set(s) cannot be downloaded.').format(failures.length)
-				]),
-				E('p', { 'style': 'color:gray' }, [
-					_('A remote rule-set is fetched before the service starts, so a rule-set that cannot be downloaded prevents the start. The service is running, so the log below is from an earlier attempt or the download has since recovered.')
-				]),
-				E('ul', {}, failures.map((f) => E('li', [
-					E('code', [ f.tag ]),
-					' — ',
-					/* Text nodes, never markup: the reason is a string
-					 * sing-box wrote, and it contains a URL. */
-					f.reason || _('(no reason recorded)'),
-					f.at ? E('small', { 'style': 'color:gray' }, [ ' — ' + f.at ]) : ''
-				])))
-			]));
-		})
-		.catch((err) => {
-			dom.content(ruleSetNode, E('span', { 'style': 'color:gray' }, [
-				_('Cannot read the sing-box client log (%s).').format(String(err))
-			]));
-		});
-}
-
 function getConnStat(o, site) {
 	o.default = E('div', { 'style': 'cbi-value-field' }, [
 		E('button', {
@@ -363,20 +301,6 @@ return view.extend({
 			return node;
 		}
 
-		s = m.section(form.NamedSection, 'config', 'homeproxy-pro', _('Rule sets'));
-		s.anonymous = true;
-
-		/* A dedicated section rather than a fourth log view: the question is
-		 * "is any rule-set currently broken", and the answer has to be a
-		 * verdict plus a per-tag reason, not a wall of log the user has to read
-		 * a timestamp out of. */
-		o = s.option(form.DummyValue, '_ruleset_status');
-		o.rawhtml = true;
-		o.render = function() {
-			renderRuleSetStatus();
-			return ruleSetNode;
-		};
-
 		/* A dedicated section rather than a fourth log view: the question this
 		 * answers is "collect everything someone would ask me to look at, in
 		 * one file", and the answer is a download rather than something to read
@@ -392,32 +316,68 @@ return view.extend({
 		s = m.section(form.NamedSection, 'config', 'homeproxy-pro', _('Diagnostic report'));
 		s.anonymous = true;
 
+		/* The button belongs on the title line, not parked under the
+		 * description where it reads as part of the paragraph.
+		 *
+		 * It cannot simply be passed in as part of the title: form.js builds
+		 * the heading with `E('h3', {}, this.title)` behind a
+		 * `typeof(this.title) == 'string'` guard, so a node here is dropped
+		 * and the heading disappears entirely.  The section's own render() is
+		 * the seam instead - it runs on every re-render and resolves with the
+		 * finished section element, so the button goes into the h3 that
+		 * render() has just built.  Nothing of LuCI's own rendering is
+		 * reproduced, which is what keeps this from silently drifting when
+		 * form.js changes. */
+		const reportButton = () => E('button', {
+			/* The same class triple as the "Clean log" button above, on
+			 * purpose: `btn` is what carries the button's font-size, so
+			 * matching it keeps the two the same size without this view
+			 * hard-coding a size of its own that the theme can change
+			 * under it. */
+			'class': 'btn cbi-button cbi-button-action',
+			'style': 'margin-left: 8px;',
+			/* createHandlerFn(ctx, fn) only uses ctx to resolve a string
+			 * method name and as the `this` for the call; fn is an arrow
+			 * function, so ctx is inert here.  The section is passed anyway
+			 * so the binding reads like the one it replaced. */
+			'click': ui.createHandlerFn(s, () => {
+				return hp.rpcCall('debug_report', [], { expect: { '': {} } })
+					.then((res) => {
+						if (!res.result)
+							throw new Error(res.error || _('Could not build the report.'));
+						return fs.read_direct(res.path, 'blob');
+					})
+					.then((blob) => {
+						const url = window.URL.createObjectURL(blob, { type: 'text/markdown' });
+						const link = document.createElement('a');
+						link.href = url;
+						link.download = 'homeproxy-pro-debug.log';
+						document.body.appendChild(link);
+						link.click();
+						document.body.removeChild(link);
+						window.URL.revokeObjectURL(url);
+					});
+			})
+		}, [ _('Generate and download') ]);
+
+		const renderDiagnosticSection = s.render.bind(s);
+		s.render = function() {
+			return renderDiagnosticSection().then((el) => {
+				/* The gap before the button is the stylesheet's
+				 * `margin-left`, not a text node - a spacer node would drag
+				 * `document` into the test environment for nothing. */
+				const heading = el.querySelector('h3');
+				if (heading)
+					dom.append(heading, reportButton());
+				return el;
+			});
+		};
+
 		o = s.option(form.DummyValue, '_debug_report');
 		o.rawhtml = true;
 		o.render = function() {
 			return E('div', { 'class': 'cbi-value' }, [
-				E('p', {}, _('Collects system, dependency, routing, firewall and configuration state into one file. Credentials are masked by option name; public addresses and LAN topology are not. Read it before posting it anywhere.')),
-				E('button', {
-					'class': 'cbi-button cbi-button-action',
-					'click': ui.createHandlerFn(this, () => {
-						return hp.rpcCall('debug_report', [], { expect: { '': {} } })
-							.then((res) => {
-								if (!res.result)
-									throw new Error(res.error || _('Could not build the report.'));
-								return fs.read_direct(res.path, 'blob');
-							})
-							.then((blob) => {
-								const url = window.URL.createObjectURL(blob, { type: 'text/markdown' });
-								const link = document.createElement('a');
-								link.href = url;
-								link.download = 'homeproxy-pro-debug.log';
-								document.body.appendChild(link);
-								link.click();
-								document.body.removeChild(link);
-								window.URL.revokeObjectURL(url);
-							});
-						})
-				}, [ _('Generate and download') ])
+				E('p', {}, _('Collects system, dependency, routing, firewall and configuration state into one file. Credentials are masked by option name; public addresses and LAN topology are not. Read it before posting it anywhere.'))
 			]);
 		};
 
