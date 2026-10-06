@@ -3,6 +3,7 @@
 
 local util = require("substore.util")
 local node = require("substore.node")
+local msg = require("substore.msg")
 local parser_clash_yaml = require("substore.parser_clash_yaml")
 local parser_json_config = require("substore.parser_json_config")
 local parser_surge = require("substore.parser_surge")
@@ -18,6 +19,9 @@ local SUPPORTED = {
 	vmess = true, vless = true, trojan = true, ss = true, ssr = true,
 	hysteria = true, hysteria2 = true, tuic = true, wireguard = true,
 	socks = true, socks5 = true,
+	-- anytls 同样必须能进：output_uri 会生成 anytls:// 链接，缺了这一项
+	-- 「导出→导入」回环就把节点整行丢掉（H 系列的老问题）。
+	anytls = true,
 }
 
 local function split_lines(content)
@@ -98,11 +102,11 @@ end
 
 -- 「混合格式」提示里各格式的显示名
 local FORMAT_LABELS = {
-	uri = "URI 链接",
+	uri = "URI link",
 	json = "JSON",
 	yaml = "Clash YAML",
 	["wireguard-conf"] = "WireGuard .conf",
-	surge = "Surge/Loon 配置",
+	surge = "Surge/Loon config",
 }
 
 -- 行首锚定，数出「整行就是一条节点链接」的行数。
@@ -344,6 +348,15 @@ local function parse_vless(uri, body)
 	if query.path then out.path = query.path end
 	if query.host then out.host = query.host end
 	if query.flow then out.flow = query.flow end
+	-- Reality（security=reality）参数。键名取自 Xray 分享链接规范
+	-- （XTLS/Xray-core discussion #716）：pbk = public-key、sid = short-id、
+	-- spx = spiderX。三者都必须回读，否则「导出→导入」回环会把 Reality 参数
+	-- 丢光 —— 缺 public-key 的 Reality 节点客户端根本连不上。
+	-- fp 上面已经回读：Reality 规范里 fp 不可省略（缺省 chrome），它同时就是
+	-- 这条连接的 uTLS 指纹。
+	if query.pbk then out["public-key"] = query.pbk end
+	if query.sid then out["short-id"] = query.sid end
+	if query.spx then out["spider-x"] = query.spx end
 	return out
 end
 
@@ -496,6 +509,53 @@ local function parse_hysteria2(uri, body)
 	-- 混淆参数回读，保证导出→导入回环不丢字段
 	if query.obfs then out.obfs = query.obfs end
 	if query["obfs-password"] then out["obfs-password"] = query["obfs-password"] end
+	return out
+end
+
+-- anytls://password@host:port/?sni=..&insecure=..#name
+-- 链接规范由 anytls-go 定义（mihomo 与 Shadowrocket 都按它解析）：密码放在
+-- userinfo（auth）位置，端口缺省 443，查询参数只有 sni 与 insecure 两个。
+local function parse_anytls(uri, body)
+	local name, rest = "", body
+	local hash = rest:find("#", 1, true)
+	if hash then
+		name = util.url_decode(rest:sub(hash + 1))
+		rest = rest:sub(1, hash - 1)
+	end
+	local query = {}
+	local qpos = rest:find("?", 1, true)
+	local hp = rest
+	if qpos then
+		hp = rest:sub(1, qpos - 1)
+		for k, v in rest:sub(qpos + 1):gmatch("([^&=]+)=([^&]*)") do
+			query[k] = util.url_decode(v)
+		end
+	end
+	-- 取最后一个 @（同 parse_socks / parse_hysteria2）：按第一个 @ 切会把密码里的
+	-- 裸 @ 当成 userinfo 分隔符，静默解析出 server="x@1.2.3.4" 这样的错节点。
+	local userinfo, hostport = hp:match("^(.*)@([^@]*)$")
+	if not userinfo then return nil, "bad anytls" end
+	local password = util.url_decode(userinfo)
+	local host, port = util.split_hostport(hostport)
+	-- 端口缺省 443：规范写的是 hostname[:port]，省略端口是合法写法。不补默认值
+	-- 会让 valid_hostport 判假，整条链接被丢弃。
+	if not port or port == "" then port = 443 end
+	if not valid_hostport(host, port) then return nil, "bad anytls" end
+	local out = node.normalize({
+		proto = "anytls", name = name, server = host, port = tonumber(port),
+		password = password, raw = uri,
+	})
+	if query.sni then out.sni = query.sni end
+	-- anytls 在 mihomo / sing-box / Surge 里都是 TLS-only（协议本身没有明文模式），
+	-- 而 anytls:// 不带 security 参数。不补上的话 output_singbox.build_tls 直接
+	-- 返回 nil，sni / insecure 全部丢失，生成的 outbound 不可用。
+	out.security = "tls"
+	-- insecure 是 URI 参数名，模型里的权威字段是 skip-cert-verify
+	-- （与 parse_hysteria2 的处理保持一致）。
+	if query.insecure ~= nil then
+		out.insecure = query.insecure
+		out["skip-cert-verify"] = not (query.insecure == "0" or query.insecure == "false")
+	end
 	return out
 end
 
@@ -742,7 +802,9 @@ local function parse_wireguard_conf(content)
 		end
 	end
 
-	if #peers == 0 then return nil, "bad wireguard conf: no [Peer]" end
+	-- 这条会一路传到用户（M.parse 里 `if not nodes then return nil, err end`），
+	-- 所以写成完整的英文 msgid，而不是 "bad wireguard conf: …" 那种内部诊断口吻。
+	if #peers == 0 then return nil, "A WireGuard .conf file has no [Peer] section" end
 
 	-- [Interface] 由各节点共享
 	local common = {
@@ -841,7 +903,7 @@ local function parse_wireguard_conf(content)
 	-- 一个可用 [Peer] 都没有时报错。此处 #peers > 0 已由上面保证，走到这里说明
 	-- 每个 [Peer] 都缺 Endpoint。不能返回空列表：空列表会被上层当成「解析成功但
 	-- 0 节点」，用户看到更新成功却一个节点都没有（H4/H5 的静默失败形态）。
-	if #nodes == 0 then return nil, "bad wireguard conf: no usable [Peer] endpoint" end
+	if #nodes == 0 then return nil, "A WireGuard .conf file has no [Peer] with a usable Endpoint" end
 
 	return nodes
 end
@@ -862,6 +924,7 @@ function M.parse_uri(uri)
 	if proto == "hysteria2" then return parse_hysteria2(uri, body) end
 	if proto == "tuic" then return parse_tuic(uri, body) end
 	if proto == "wireguard" then return parse_wireguard(uri, body) end
+	if proto == "anytls" then return parse_anytls(uri, body) end
 	if proto == "socks" or proto == "socks5" then return parse_socks(uri, body) end
 	return nil, "unsupported"
 end
@@ -880,7 +943,7 @@ end
 
 local function parse_json_content(content)
 	local data = util.json_decode(content)
-	if type(data) ~= "table" then return nil, "JSON 解析失败" end
+	if type(data) ~= "table" then return nil, "Failed to parse JSON" end
 
 	-- 客户端配置文件分发：sing-box / V2Ray / Clash JSON
 	if type(data.outbounds) == "table" then
@@ -1485,7 +1548,7 @@ function M.parse(content)
 	elseif format == "base64" then
 		-- 兼容标准 base64 与 base64url（- _ 无 padding）：base64_url_decode 两者皆可
 		local decoded = util.base64_url_decode(content)
-		if decoded == "" then return nil, "Base64 解码失败" end
+		if decoded == "" then return nil, "Base64 decoding failed" end
 		-- 解出来的内容本身可能是 YAML / JSON：机场把整份 Clash 配置或 sing-box
 		-- 配置 base64 后直接下发是很常见的做法。原先一律按 URI 列表解析，这类
 		-- 订阅会得到 0 个节点且不报错（用户只看到「订阅为空」）。
@@ -1513,7 +1576,7 @@ function M.parse(content)
 		if not nodes then return nil, err end
 		return finish(nodes, "wireguard-conf")
 	end
-	return nil, "无法识别的订阅格式"
+	return nil, "Unrecognized subscription format"
 end
 
 -- 本地订阅解析：支持文本模式和表单模式
@@ -1523,7 +1586,7 @@ function M.parse_local(content, mode)
 	if mode == "form" then
 		-- 表单模式：content 为 JSON 数组
 		local data = util.json_decode(content)
-		if type(data) ~= "table" then return nil, "表单数据解析失败" end
+		if type(data) ~= "table" then return nil, "Failed to parse form data" end
 		local node_mod = require("substore.node")
 		local nodes = {}
 		for _, item in ipairs(data) do
@@ -1589,7 +1652,7 @@ function M.parse_local(content, mode)
 					else
 						local opt = util.json_decode(s)
 						if type(opt) ~= "table" then
-							return nil, "AmneziaWG 参数必须是合法的 JSON 对象"
+							return nil, "The AmneziaWG options must be a valid JSON object"
 						end
 						n["amnezia-wg-option"] = opt
 					end
@@ -1614,8 +1677,9 @@ function M.parse_local(content, mode)
 	if #formats > 1 then
 		local names = {}
 		for i, f in ipairs(formats) do names[i] = FORMAT_LABELS[f] or f end
-		return nil, "同一份文本里混用了多种格式（" .. table.concat(names, " + ") ..
-			"）：一次只能导入一种格式，请拆开后分次导入"
+		return nil, msg.compose("Mixed formats in one text (",
+			msg.compose_list(names, " + "),
+			"): only one format can be imported at a time; split the text and import the parts separately")
 	end
 	return M.parse(content)
 end

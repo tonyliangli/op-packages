@@ -262,24 +262,26 @@ hp_rule_set_current() {
 	[ -f "$out" ] && [ -s "$out" ] && [ "$out" -nt "$src" ]
 }
 
-# hp_prepare_runtime_files <hp-dir> <run-dir> <routing-mode> <client> <server>
-# Create the mode-specific working files, truncate the instance logs and hand
-# every runtime file to the sing-box user.  <client>/<server> are "1"/"0".
-hp_prepare_runtime_files() {
+# hp_prepare_generated_inputs <hp-dir> <client-enabled>
+# Produce every rule-set the generated configuration references, BEFORE the
+# generator runs.
+#
+# Why before: `sing-box check` opens every local rule_set path, and the client
+# generator declares china-ip from china_ip4.json (route.uc, gated on
+# china_ip4_ready).  When these files were produced *after* the generation step
+# (they used to live at the end of hp_prepare_runtime_files), a fresh install had
+# no china_ip4.json at generation time, `sing-box check` failed, and the client
+# could not start at all - the reload preflight aborts before the rule-set step,
+# so it could not heal itself either.  Measured on the device: generation exit=1
+# with "parse rule-set[0]: open .../china_ip4.json: no such file or directory",
+# and exit=0 once the three files had been produced.
+#
+# Cheap when nothing changed: hp_rule_set_current skips an unchanged source.
+hp_prepare_generated_inputs() {
 	local hp_dir="$1"
-	local run_dir="$2"
-	local routing_mode="$3"
-	local client_enabled="$4"
-	local server_enabled="$5"
+	local client_enabled="$2"
 
-	# The route rules that keep mainland destinations direct match a local
-	# rule-set generated from china_ip4.txt, the same list the firewall
-	# renders its nft set from, so both sides decide from one source.  It is
-	# regenerated here as well as by the resource updater: an install that
-	# predates this file (or a list replaced while the service was stopped)
-	# must still get one, or the client config would reference a missing
-	# file and sing-box would refuse to start.  A missing source list is not
-	# an error - the generator then emits no route-side rule at all.
+	# china-ip4: the route rule keeping mainland IPv4 destinations direct.
 	if [ "$client_enabled" = "1" ] && [ -f "$hp_dir/resources/china_ip4.txt" ]; then
 		if hp_rule_set_current "$hp_dir/resources/china_ip4.txt" "$hp_dir/resources/china_ip4.json"; then
 			# Unchanged source: keep the file, but re-assert ownership anyway -
@@ -295,16 +297,14 @@ hp_prepare_runtime_files() {
 		fi
 	fi
 
-	# IPv6 half of the same arrangement, and the only place the "IPv6 is on
-	# but cannot be classified" condition is reported in a place a user reads
-	# without tcpdump.  geoip-cn.srs and china_ip4.json are both IPv4-only, so
-	# without a v6 rule-set a mainland destination reached over IPv6 matches
-	# no route rule at all and falls through to `final` - i.e. to the proxy.
-	# The firewall would normally have returned it first, but that set is
-	# filled from the same china_ip6.txt, so a list that is missing or has no
-	# usable prefix leaves neither side able to classify it.  Say so plainly
-	# instead: the generated ruleset also carries the same text as a rule
-	# comment, so `nft list ruleset` shows the degraded state too.
+	# china-ip6, plus the only user-facing report of "IPv6 is on but cannot be
+	# classified".  Neither geoip-cn.srs nor china_ip4.json carries IPv6, so
+	# without a v6 rule-set a mainland destination reached over IPv6 matches no
+	# route rule and falls through to `final`; the firewall's v6 set is filled
+	# from this same china_ip6.txt, so a missing or prefixless list leaves
+	# neither side able to classify it.  cn_ipv6 counts usable prefixes first -
+	# the generator needs at least one, so a zero-count list must skip straight
+	# to the warning rather than call ucode and log a second failure.
 	local ipv6_support cn_ipv6
 	config_get_bool ipv6_support "config" "ipv6_support" "0"
 	cn_ipv6=0
@@ -320,10 +320,6 @@ hp_prepare_runtime_files() {
 			chown sing-box:sing-box "$hp_dir/resources/china_ip6.json" 2>"/dev/null" \
 				|| log "Warning: failed to hand ${hp_dir}/resources/china_ip6.json to sing-box."
 		else
-			# Only reached when the source is unusable, which china_ip_ruleset.uc
-			# reports as "no usable CIDR entries".  Keep the previous file: an
-			# empty one would make the route-side set match nothing, which is the
-			# same silent inversion this whole branch exists to prevent.
 			log "Warning: could not generate ${hp_dir}/resources/china_ip6.json; the route side keeps the previous list."
 		fi
 	fi
@@ -332,17 +328,7 @@ hp_prepare_runtime_files() {
 		log "WARNING: mainland IPv6 cannot be told apart from foreign IPv6, so IPv6 is passed through UNPROXIED (both sides of the split degrade). Run: ${hp_dir}/scripts/update_resources.sh china_ip6"
 	fi
 
-	# The DNS half of the China split, same arrangement as china_ip4.json above:
-	# the dns rule sends the list's domains to china-dns, and it reads
-	# china-domain.json rather than a remote geosite-geolocation-cn.srs so a
-	# cold start has nothing to download.  Generated here for the same reason -
-	# an install that predates the file, or a list replaced while the service
-	# was stopped, must still get one, or the client config names a file that
-	# does not exist and sing-box refuses to start.
-	#
-	# A missing china_list.txt is not an error: the generator then emits no
-	# DNS-side rule for it, and the split degrades to the resolver default
-	# rather than failing the start.
+	# china-domain: the DNS half, sending the list's domains to china-dns.
 	if [ "$client_enabled" = "1" ] && [ -f "$hp_dir/resources/china_list.txt" ]; then
 		if hp_rule_set_current "$hp_dir/resources/china_list.txt" "$hp_dir/resources/china-domain.json"; then
 			chown sing-box:sing-box "$hp_dir/resources/china-domain.json" 2>"/dev/null" \
@@ -352,11 +338,55 @@ hp_prepare_runtime_files() {
 			chown sing-box:sing-box "$hp_dir/resources/china-domain.json" 2>"/dev/null" \
 				|| log "Warning: failed to hand ${hp_dir}/resources/china-domain.json to sing-box."
 		else
-			# Same reasoning as the v6 branch above: the helper refuses to
-			# write an empty rule-set, and the previous one is still valid.
 			log "Warning: could not generate ${hp_dir}/resources/china-domain.json; the DNS side keeps the previous list."
 		fi
 	fi
+}
+
+# hp_prepare_runtime_files <hp-dir> <run-dir> <routing-mode> <client> <server>
+# Create the mode-specific working files, truncate the instance logs and hand
+# every runtime file to the sing-box user.  <client>/<server> are "1"/"0".
+#
+# The three China rule-sets below (china-ip4, china-ip6, china-domain) share one
+# arrangement, and the reasons for it are stated once here rather than three
+# times in the branches:
+#
+#   * Each is generated locally from a .txt the resource updater maintains, not
+#     downloaded as an upstream .srs (geoip-cn.srs / geosite-geolocation-cn.srs),
+#     so a cold start has nothing to download before the inbounds bind.  The
+#     firewall reads the same .txt for its nft set, so both halves of the split
+#     decide from one source and cannot drift.
+#   * Generated here as well as by the updater: an install that predates the
+#     .json, or a list replaced while the service was stopped, must still get
+#     one - otherwise the generated config names a file that does not exist and
+#     `sing-box check` refuses the start.
+#   * A missing source .txt is NOT an error.  The generator then emits no
+#     route-side / DNS-side rule for it and the split degrades to the default,
+#     rather than failing the start.
+#   * A FAILED generation keeps the previous .json rather than writing an empty
+#     one.  This is the trap all three branches exist to avoid: an empty
+#     rule-set matches nothing, so a mainland destination silently falls through
+#     to `final` (i.e. the proxy) and the mode does the exact opposite of what it
+#     promises - an inversion that produces no error anywhere.  Both helper
+#     scripts (china_ip_ruleset.uc / domain_ruleset.uc) refuse to write an empty
+#     rule-set and exit non-zero, which is what the else-branches log.
+#   * The generated rule-set also carries this same text as a rule comment, so
+#     `nft list ruleset` shows the degraded state too.
+#
+# NOTE: the three China rule-sets are produced by hp_prepare_generated_inputs(),
+# which runs BEFORE the generator (see init.d) - this function no longer creates
+# them; it only re-asserts them for a caller that arrives here directly.
+hp_prepare_runtime_files() {
+	local hp_dir="$1"
+	local run_dir="$2"
+	local routing_mode="$3"
+	local client_enabled="$4"
+	local server_enabled="$5"
+
+	# The rule-sets the generated configuration references.  Also called before
+	# generation (init.d), which is what makes a fresh install work; idempotent
+	# and cheap when the sources did not change.
+	hp_prepare_generated_inputs "$hp_dir" "$client_enabled"
 
 	# cache_file is enabled for bypass_mainland_china and custom alike
 	# (generator/common.uc:attachExperimental).  The file has to exist before
@@ -571,6 +601,108 @@ hp_capture_candidate() {
 	return 0
 }
 
+# hp_reload_is_noop <run-dir> <good-dir> <client-enabled> <server-enabled>
+# 0 when this reload would change nothing that is currently running, so the
+# caller can skip the stop;start entirely.
+#
+# Why this exists: reload_service used to stop and start unconditionally, and
+# hp_same_file was only ever used on the rollback path.  Measured on the device,
+# one reload costs about eight seconds (09:17:40 -> 09:17:48 in the log) and
+# interrupts every connection, even when the generated configuration is
+# byte-identical to the one already running.  That is the common case for
+# "Save & Apply" with nothing edited, for a node switch that lands on the same
+# node, and for the nightly resource refresh.
+#
+# THE COMPARISON IS AGAINST known-good, NOT AGAINST THE CANDIDATE, and getting
+# that wrong silently disables the whole mechanism.  Measured on the device:
+# the generator writes straight to $RUN_DIR/sing-box-c.json and
+# hp_capture_candidate() copies that same file afterwards, so after a preflight
+# the candidate and the live file are the SAME BYTES BY CONSTRUCTION - comparing
+# them reports "unchanged" for every reload, including one that switched the main
+# node.  The first version of this helper did exactly that, and the only reason
+# it was caught is an on-device test that switched nodes and watched the PID.
+#
+# known-good is the right counterpart for the same reason the rollback path uses
+# it: hp_promote_known_good writes it ONLY after the health gate has passed, so
+# it is by definition "the configuration that is currently running and working".
+# live vs known-good answers the question this helper is actually asking - "would
+# the running configuration change?" - and a missing known-good simply falls
+# through to a real reload.
+#
+# Every condition is a *precondition for the skip being safe*, and the default
+# on any doubt is to reload:
+#
+#   [1] the service is actually running.  A live file left over from a crashed
+#       instance is not a running service, and skipping the restart would
+#       report success over a dead proxy.  Asked of ubus, the same source the
+#       status page reads.
+#   [2] the side has both a live file and a known-good copy to compare against.
+#       A side the user just enabled has neither, and that is a change, not a
+#       no-op.
+#   [3] the intercept layer is installed.  A released layer (the marker
+#       hp_release_stale_intercept writes) means the firewall is NOT proxying
+#       right now even though sing-box is up.  Skipping the restart would leave
+#       it that way and log "nothing to restart" - the exact silent state
+#       hp_rearm_intercept exists to undo.  Reloading is what re-arms it.
+hp_reload_is_noop() {
+	local run_dir="$1"
+	local good_dir="$2"
+	local client_enabled="$3"
+	local server_enabled="$4"
+	local live good
+
+	# [3] first, because it is the cheapest and the most dangerous to skip.
+	[ ! -f "$run_dir/intercept-released" ] || return 1
+
+	# [1] the instances.  `command -v ubus` because this module is also sourced
+	# by the off-target test driver, where ubus does not exist and the honest
+	# answer there is "cannot prove it is a no-op".
+	#
+	# The check is on `"running": true`, NOT on the instance merely appearing
+	# in the list: procd keeps a stopped instance in `service list` with
+	# running=false, so matching the key alone reports a dead proxy as running
+	# and the skip then claims success over it.  That was not theoretical - the
+	# first version of this grep did exactly that and its own test caught it.
+	command -v ubus > "/dev/null" 2>&1 || return 1
+
+	local svc_list
+	svc_list="$(ubus call service list "{\"name\":\"$CONF\"}" 2>/dev/null)"
+
+	if [ "$client_enabled" = "1" ]; then
+		printf '%s' "$svc_list" \
+			| grep -A 3 '"sing-box-c"' \
+			| grep -q '"running"[[:space:]]*:[[:space:]]*true' || return 1
+	fi
+
+	if [ "$server_enabled" = "1" ]; then
+		printf '%s' "$svc_list" \
+			| grep -A 3 '"sing-box-s"' \
+			| grep -q '"running"[[:space:]]*:[[:space:]]*true' || return 1
+	fi
+
+	# [2] and the byte comparison, per side.
+	# [2] and the byte comparison, per side, against what is known to be running
+	# rather than against the candidate (see the note at the top of this
+	# function - the two are the same bytes by construction).
+	if [ "$client_enabled" = "1" ]; then
+		live="$run_dir/sing-box-c.json"
+		good="$good_dir/sing-box-c.json"
+
+		[ -s "$live" ] && [ -s "$good" ] || return 1
+		cmp -s "$live" "$good" 2>"/dev/null" || return 1
+	fi
+
+	if [ "$server_enabled" = "1" ]; then
+		live="$run_dir/sing-box-s.json"
+		good="$good_dir/sing-box-s.json"
+
+		[ -s "$live" ] && [ -s "$good" ] || return 1
+		cmp -s "$live" "$good" 2>"/dev/null" || return 1
+	fi
+
+	return 0
+}
+
 # hp_start_generated_config <side> <hp-dir> <run-dir> <good-dir>
 # The start-path transaction for one side ("c" or "s"):
 #
@@ -657,6 +789,7 @@ hp_start_generated_config() {
 	fi
 
 	ucode -S "$generator" 2>>"$LOG_PATH"
+	gen_rc=$?
 
 	# The generator is transactional on its own: it writes a temporary file
 	# and only renames it over the live one once `sing-box check` accepted
@@ -666,6 +799,12 @@ hp_start_generated_config() {
 	hp_ensure_live "$live" "$good"
 	case "$?" in
 	0)
+		# A live file exists, but it may be the *previous* configuration: a
+		# failed generation leaves it in place.  That used to be reported as a
+		# plain success with nothing in the log - `start` on a service whose
+		# UCI had gone invalid returned 0 while the old file kept running.
+		[ "$gen_rc" = "0" ] \
+			|| log "Warning: could not regenerate the ${label} configuration (generator exit ${gen_rc}); the previous configuration stays in place."
 		;;
 	1)
 		log "Error: failed to generate a valid ${label} configuration; falling back to the last known-good one." ;;

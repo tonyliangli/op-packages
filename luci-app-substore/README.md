@@ -54,8 +54,11 @@
 - 15 种输出格式：Plain JSON、Stash、Clash.Meta / Mihomo、Clash 原版、Surfboard、Surge、
   Surge Mac、Loon、Egern、Shadowrocket、Quantumult X、sing-box、V2Ray / Xray、
   V2Ray URI、WireGuard / AmneziaWG `.conf`
-- SSR（`ssr://`）只能原样输出到支持它的客户端（Mihomo、Stash、Loon、Egern、Shadowrocket），
-  其余目标会将其丢弃
+- SSR（`ssr://`）只能原样输出到支持它的客户端（Mihomo、Stash、Loon、Shadowrocket），
+  其余目标会将其丢弃；VLESS 同理，Surge / Surfboard / Surge Mac 的协议清单里没有它
+  （Surge 家族与 Loon 的清单见 `output_formats.lua` 的 `FAMILY_CAPS`；
+  Egern 的配置是 YAML，清单见 `output_egern.lua` 的 `EGERN_KEY` ——
+  它有 VLESS 与 WireGuard，没有 SSR 与 Hysteria v1）
 - **只输出目标客户端真正能加载的内容**：按目标能力过滤协议；数组字段按客户端要求的类型
   输出；策略组成员列表剔除会破坏语法的节点名
 - sing-box / V2Ray(Xray) 输出**完整可用配置**（含分流规则），可直接作为单文件配置启动
@@ -72,21 +75,32 @@
 ## 安装
 
 > 包名中的版本号必须与 [Makefile](Makefile) 的 `PKG_VERSION` / `PKG_RELEASE` 保持一致
-> （当前 `2.7.1-r5`）。
+> （当前 `2.7.2-r1`）。
 
 **最低支持 OpenWrt / ImmortalWrt 23.05**（更早的版本不在支持范围内）。
 
 opkg（OpenWrt / ImmortalWrt 24.10 及更早）：
 
 ```bash
-opkg install luci-app-substore-2.7.1-r5.ipk
+opkg install luci-app-substore-2.7.2-r1.ipk
 ```
 
 apk（OpenWrt / ImmortalWrt 25.12+）：
 
 ```bash
-apk add --allow-untrusted luci-app-substore-2.7.1-r5.apk
+apk add --allow-untrusted luci-app-substore-2.7.2-r1.apk
 ```
+
+简体中文界面需要**单独安装**翻译包 —— 主包不含译文，未装时界面为英文：
+
+```bash
+opkg install luci-i18n-substore-zh-cn_*.ipk                 # 24.10 及更早
+apk add --allow-untrusted luci-i18n-substore-zh-cn_*.apk    # 25.12+
+```
+
+> 翻译包的版本号由 `po/` 目录的提交时间推导（LuCI 的 `PKG_PO_VERSION`），
+> 与主包的 `2.7.2-r1` 不同名，按文件名通配安装即可。装好后 LuCI 语言设为
+> 「简体中文」即生效（该包的 uci-defaults 会自动把它加进 `luci.languages`）。
 
 然后在 LuCI 菜单打开：**服务 → 订阅**。
 
@@ -149,7 +163,7 @@ apk add --allow-untrusted luci-app-substore-2.7.1-r5.apk
 │   │       ├── luci/menu.d/luci-app-substore.json
 │   │       ├── rpcd/acl.d/luci-app-substore.json  # ACL 组（菜单 depends.acl 引用）
 │   │       └── substore/*.lua    # 核心逻辑（不依赖 luci.*）
-├── po/zh-cn/substore.po          # 简体中文翻译
+├── po/zh_Hans/substore.po        # 简体中文翻译（编译为独立包 luci-i18n-substore-zh-cn）
 ├── docs/                         # 设计与指南
 └── tests/                        # 自包含 Lua 5.1 单元测试
 ```
@@ -173,6 +187,8 @@ apk add --allow-untrusted luci-app-substore-2.7.1-r5.apk
 ```bash
 cp -r luci-app-substore <openwrt-tree>/package/
 make package/luci-app-substore/compile V=s
+# 简体中文翻译是独立包（luci.mk 按 po/zh_Hans/ 自动生成），需要单独编译：
+make package/luci-i18n-substore-zh-cn/compile V=s
 ```
 
 `.ipk`（或 apk 构建下的 `.apk`）生成于 `bin/packages/.../` 下。

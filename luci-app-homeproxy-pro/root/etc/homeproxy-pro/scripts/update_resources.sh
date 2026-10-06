@@ -115,7 +115,13 @@ check_list_update() {
 
 	# --header takes '=': the space-separated form is rejected, and the value
 	# has to stay ONE argv element, which the quoting around it preserves.
-	local list_info="$($fetch ${github_header:+--header="$github_header"} -O- "https://api.github.com/repos/$listrepo/commits?sha=$listref&path=$listname&per_page=1")"
+	# `local x="$(...)"` returns the status of `local`, not of the command
+	# substitution - measured on the device: busybox ash gives 0 even when the
+	# fetch failed.  That made the branch below dead and reported a network
+	# failure as "Failed to get the latest version, please retry later", which
+	# loses the difference between "could not fetch" and "fetched, got nothing".
+	local list_info
+	list_info="$($fetch ${github_header:+--header="$github_header"} -O- "https://api.github.com/repos/$listrepo/commits?sha=$listref&path=$listname&per_page=1")"
 	local fetch_exit=$?
 
 	if [ $fetch_exit -ne 0 ]; then
@@ -242,15 +248,41 @@ check_list_update() {
 			# china_ip4.json exists: one list with two readers, and nothing for
 			# a cold start to download before the inbounds bind.
 			#
-			# The sed above rewrote the file in place, so this runs after it
-			# and sees the cleaned list.  `full:` prefixes and anything with a
-			# colon are gone by now; what is left is what the helper accepts.
-			if ucode -S "$SCRIPT_DIR/runtime/domain_ruleset.uc" \
-				"$RESOURCES_DIR/$listtype.txt" "$RESOURCES_DIR/china-domain.json" >>"$LOG_PATH" 2>&1; then
-				log "[CHINA_LIST] DNS-side rule-set regenerated."
-				chown sing-box:sing-box "$RESOURCES_DIR/china-domain.json" 2>"/dev/null"
+			# Normalise FIRST, generate second - and both inside this branch.
+			# The order is load-bearing, and it was previously wrong: the sed
+			# lived in the `case "china_list"` arm, i.e. after this function had
+			# already returned, so the generator was handed the RAW download.
+			# That is not a theoretical difference.  Upstream ships `full:`
+			# prefixes and the colon-carrying `regexp:` / `keyword:` forms
+			# still in the file - 562 of 111,361 lines in the release measured
+			# here - and domain_ruleset.uc rejects every entry containing a
+			# colon, so 554 real domains were dropped from the DNS split and
+			# the only trace was a "skipped N malformed entries" line naming a
+			# list that was perfectly well formed.
+			#
+			# Not `sed -i`: that form is a busybox/GNU extension, and the same
+			# script is exercised off-device where a non-busybox sed fails it
+			# with "invalid command code".  Edit through a temp file, the way
+			# the crontab helper in runtime/service.sh does.
+			#
+			# A normalisation that fails does not undo the install - the list
+			# on disk is the one the upstream commit vouched for, and the
+			# firewall renders its nft set from that very file.  The generator
+			# is skipped instead, so the DNS side keeps the previous rule-set
+			# rather than being rebuilt from a list the sed only half-processed.
+			if sed -e "s/full://g" -e "/:/d" "$RESOURCES_DIR/$listtype.txt" \
+				> "$RESOURCES_DIR/$listtype.txt.hp-new" \
+				&& mv -f "$RESOURCES_DIR/$listtype.txt.hp-new" "$RESOURCES_DIR/$listtype.txt"; then
+				if ucode -S "$SCRIPT_DIR/runtime/domain_ruleset.uc" \
+					"$RESOURCES_DIR/$listtype.txt" "$RESOURCES_DIR/china-domain.json" >>"$LOG_PATH" 2>&1; then
+					log "[CHINA_LIST] DNS-side rule-set regenerated."
+					chown sing-box:sing-box "$RESOURCES_DIR/china-domain.json" 2>"/dev/null"
+				else
+					log "[CHINA_LIST] Warning: could not regenerate china-domain.json (list has no usable domain entry?); the DNS side keeps the previous list."
+				fi
 			else
-				log "[CHINA_LIST] Warning: could not regenerate china-domain.json (list has no usable domain entry?); the DNS side keeps the previous list."
+				rm -f "$RESOURCES_DIR/$listtype.txt.hp-new"
+				log "[CHINA_LIST] Warning: could not normalise the downloaded list; it is installed as downloaded and the DNS side keeps the previous rule-set."
 			fi
 			;;
 		esac
@@ -274,14 +306,23 @@ case "$1" in
 	check_list_update "$1" "Loyalsoldier/v2ray-rules-dat" "release" "gfw.txt"
 	;;
 "china_list")
-	# Not `sed -i`: the bare -i form is a busybox/GNU extension, and the same
-	# script is exercised off-device where a non-busybox sed fails it with
-	# "invalid command code".  Edit through a temp file, the way the crontab
-	# helper in runtime/service.sh does.
-	check_list_update "$1" "Loyalsoldier/v2ray-rules-dat" "release" "direct-list.txt" && \
-		sed -e "s/full://g" -e "/:/d" "$RESOURCES_DIR/china_list.txt" > "$RESOURCES_DIR/china_list.txt.hp-new" && \
-		mv -f "$RESOURCES_DIR/china_list.txt.hp-new" "$RESOURCES_DIR/china_list.txt" || \
-		rm -f "$RESOURCES_DIR/china_list.txt.hp-new"
+	# The `full:` prefixes and the colon-carrying regexp:/keyword: forms are
+	# stripped inside check_list_update, BEFORE the DNS-side rule-set is
+	# generated from the list - domain_ruleset.uc rejects any entry containing
+	# a colon, so the order decides whether 554 real domains are in the split
+	# or silently skipped.  See the case branch there; this arm is only the
+	# list's own upstream coordinates.
+	#
+	# The status has to survive the post-processing.  As one &&...|| chain it
+	# did not: when check_list_update returned 3 ("already current") or 1
+	# (fetch failed) the chain short-circuited into `rm -f`, whose status 0
+	# became the script's - so update_resources_cron.sh counted "no change" as
+	# a change and reloaded the service every single day, and the LuCI button
+	# reported "Successfully updated." for a fetch that never happened.
+	# Measured on the device: china_list exited 0 for both the failure and the
+	# up-to-date case, while china_ip4 exited 1 / 3 correctly.
+	check_list_update "$1" "Loyalsoldier/v2ray-rules-dat" "release" "direct-list.txt"
+	exit $?
 	;;
 *)
 	printf '%s\n' "Usage: $0 <china_ip4 / china_ip6 / gfw_list / china_list>"
